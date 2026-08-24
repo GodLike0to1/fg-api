@@ -5,6 +5,11 @@
  */
 require __DIR__ . '/fg-config.php';
 fg_preflight();
+// GET → the public web client ID for the Google sign-in button (not a secret).
+if ($_SERVER['REQUEST_METHOD'] === 'GET') {
+    $sec = fg_secrets();
+    fg_json(200, ['clientId' => $sec['google_web_client_id'] ?? null]);
+}
 if ($_SERVER['REQUEST_METHOD'] !== 'POST') fg_json(405, ['error' => 'POST only']);
 
 $b = fg_body();

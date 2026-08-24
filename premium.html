@@ -40,6 +40,17 @@
 </div>
 <script>
 const API = 'https://netmock.com/fg-api';
+// Opened from the app: ?email=... prefills the Gmail and starts checkout
+// immediately, so the student lands straight on the UPI app buttons.
+window.addEventListener('DOMContentLoaded', () => {
+  try {
+    const em = new URLSearchParams(location.search).get('email');
+    if (em && /^[^@\s]+@[^@\s]+\.[^@\s]+$/.test(em)) {
+      document.getElementById('email').value = em;
+      setTimeout(startPay, 300);
+    }
+  } catch (e) {}
+});
 async function startPay(){
   const err = document.getElementById('err');
   const btn = document.getElementById('pay');
