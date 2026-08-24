@@ -1,0 +1,75 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>FlashGenius Premium — ₹199/month</title>
+<script src="https://checkout.razorpay.com/v1/checkout.js"></script>
+<style>
+  body{font-family:-apple-system,Segoe UI,Roboto,sans-serif;background:#f5f3ff;margin:0;display:flex;min-height:100vh;align-items:center;justify-content:center}
+  .card{background:#fff;border-radius:20px;box-shadow:0 10px 40px rgba(91,33,182,.15);padding:36px 30px;max-width:420px;width:92%;text-align:center}
+  h1{font-size:22px;color:#4c1d95;margin:0 0 6px}
+  p{color:#555;font-size:14px;line-height:1.5}
+  .price{font-size:34px;font-weight:800;color:#111;margin:14px 0 2px}
+  .per{color:#777;font-size:13px}
+  ul{text-align:left;padding-left:20px;color:#333;font-size:14px;line-height:1.9;margin:18px 0}
+  input{width:100%;box-sizing:border-box;padding:13px 14px;border:1.5px solid #ddd;border-radius:12px;font-size:15px;margin:6px 0 14px}
+  button{width:100%;padding:15px;border:0;border-radius:14px;background:linear-gradient(90deg,#7c3aed,#4f46e5);color:#fff;font-size:16px;font-weight:700;cursor:pointer}
+  button:disabled{opacity:.6}
+  .note{font-size:11.5px;color:#888;margin-top:14px}
+  .err{color:#b91c1c;font-size:13px;min-height:18px;margin-top:8px}
+  .ok{color:#047857;font-weight:700;font-size:15px;margin-top:12px}
+</style>
+</head>
+<body>
+<div class="card">
+  <h1>FlashGenius Premium</h1>
+  <p>Every chapter of UPSC, UPPCS &amp; NCERT unlocked. Unlimited MCQs, bilingual, with explanations.</p>
+  <div class="price">₹199</div>
+  <div class="per">per month · UPI AutoPay · cancel anytime</div>
+  <ul>
+    <li>Use the <b>same Gmail you use in the FlashGenius app</b></li>
+    <li>Premium activates in the app automatically after payment</li>
+    <li>Works on any phone — just sign in with your Gmail</li>
+  </ul>
+  <input id="email" type="email" placeholder="Your Gmail (same as in the app)" autocomplete="email">
+  <button id="pay" onclick="startPay()">Subscribe — ₹199/month</button>
+  <div class="err" id="err"></div>
+  <div class="ok" id="ok" style="display:none">✅ Payment set up! Open FlashGenius and sign in with this Gmail — Premium will be active.</div>
+  <div class="note">Auto-debits ₹199 monthly via UPI AutoPay. Cancel anytime — no further charges. Support: netmockias@gmail.com · <a href="https://netmock.com/cancellation-and-refund-policy/">Refund policy</a></div>
+</div>
+<script>
+const API = 'https://netmock.com/fg-api';
+async function startPay(){
+  const err = document.getElementById('err');
+  const btn = document.getElementById('pay');
+  const email = document.getElementById('email').value.trim();
+  err.textContent = '';
+  if(!/^[^@\s]+@[^@\s]+\.[^@\s]+$/.test(email)){ err.textContent = 'Please enter the Gmail you use in the app.'; return; }
+  btn.disabled = true; btn.textContent = 'Preparing…';
+  try{
+    const r = await fetch(API + '/create-subscription.php', {
+      method:'POST', headers:{'Content-Type':'application/json'},
+      body: JSON.stringify({email})
+    });
+    const j = await r.json();
+    if(!r.ok) throw new Error(j.error || 'Could not start checkout');
+    const rzp = new Razorpay({
+      key: j.keyId,
+      subscription_id: j.subscriptionId,
+      name: 'NetMock — FlashGenius Premium',
+      description: '₹199/month · UPI AutoPay',
+      prefill: { email },
+      theme: { color: '#7c3aed' },
+      handler: function(){
+        document.getElementById('ok').style.display = 'block';
+        btn.style.display = 'none';
+      }
+    });
+    rzp.open();
+  }catch(e){ err.textContent = e.message; }
+  btn.disabled = false; btn.textContent = 'Subscribe — ₹199/month';
+}
+</script>
+</body>
+</html>
