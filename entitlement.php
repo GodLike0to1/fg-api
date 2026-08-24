@@ -39,6 +39,18 @@ if (!$premium) {
                 $user['subscription_id'] = $subId;
                 $user['source'] = 'razorpay_web';
                 unset($user['pending_subscription']);
+                // First activation → alert the owner: a new subscriber paid.
+                if (empty($user['owner_notified'])) {
+                    $user['owner_notified'] = true;
+                    $h = "MIME-Version: 1.0\r\nContent-Type: text/html; charset=UTF-8\r\nFrom: FlashGenius <no-reply@netmock.com>\r\n";
+                    @mail('netmockias@gmail.com',
+                        'New FlashGenius subscriber: ' . $email,
+                        '<div style="font-family:sans-serif"><h3>New ₹199/month subscriber 🎉</h3>'
+                        . '<p><b>Email:</b> ' . htmlspecialchars($email) . '<br>'
+                        . '<b>Subscription:</b> ' . htmlspecialchars($subId) . '<br>'
+                        . '<b>Status:</b> ' . htmlspecialchars($status) . '<br>'
+                        . '<b>Paid till:</b> ' . date('d M Y', $end) . '</p></div>', $h);
+                }
                 fg_save_user($email, $user);
                 $until = $user['premium_until'];
                 $premium = true;

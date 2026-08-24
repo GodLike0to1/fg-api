@@ -46,7 +46,10 @@ window.addEventListener('DOMContentLoaded', () => {
   try {
     const em = new URLSearchParams(location.search).get('email');
     if (em && /^[^@\s]+@[^@\s]+\.[^@\s]+$/.test(em)) {
-      document.getElementById('email').value = em;
+      const inp = document.getElementById('email');
+      inp.value = em;
+      inp.readOnly = true; // payment must bind to the SAME email the app is logged in with
+      inp.style.background = '#f3f4f6';
       setTimeout(startPay, 300);
     }
   } catch (e) {}
