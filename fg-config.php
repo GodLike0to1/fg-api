@@ -16,15 +16,20 @@ error_reporting(0);
 function fg_secrets() {
     static $s = null;
     if ($s === null) {
-        $f = __DIR__ . '/fg-secret.php';
-        $s = is_readable($f) ? include $f : [];
+        // Secrets live OUTSIDE public_html (…/domains/netmock.com/fg-secret.php)
+        // so Git auto-deploys can never wipe them. Old in-folder path is a fallback.
+        foreach ([dirname(__DIR__, 2) . '/fg-secret.php', __DIR__ . '/fg-secret.php'] as $f) {
+            if (is_readable($f)) { $s = include $f; break; }
+        }
+        if (!is_array($s)) $s = [];
     }
     return $s;
 }
 
 // Flat-file store: one JSON file per user, keyed by sha1(email).
 // data/ is protected by .htaccess (deny all) — only PHP reads it.
-define('FG_DATA_DIR', __DIR__ . '/data');
+// Student records also live OUTSIDE public_html — deploy-proof and web-unreachable.
+define('FG_DATA_DIR', dirname(__DIR__, 2) . '/fg-data');
 
 function fg_store_path($email) {
     return FG_DATA_DIR . '/' . sha1(strtolower(trim($email))) . '.json';
