@@ -9,7 +9,7 @@
 require __DIR__ . '/fg-config.php';
 fg_preflight();
 $GH = 'https://raw.githubusercontent.com/GodLike0to1/flashgenius-data/refs/heads/main/decks/';
-$dir = FG_DATA_DIR . '/ghpool';
+$dir = FG_DATA_DIR . '/ghpool2';
 if (!is_dir($dir)) { mkdir($dir, 0755, true); @file_put_contents(FG_DATA_DIR . '/.htaccess', "Require all denied\n"); }
 
 function dc_fetch($GH, $dir, $name, $ttl) {
@@ -49,7 +49,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'GET') {
     foreach (array_filter(explode(',', $_GET['seen'] ?? '')) as $s) $seen[(int)$s] = true;
     for ($v = 1; $v <= $n; $v++) {
         if (isset($seen[$v])) continue;
-        $raw = dc_fetch($GH, $dir, $key . ($v > 1 ? "-$v" : '') . '.json', 86400);
+        $raw = dc_fetch($GH, $dir, $key . ($v > 1 ? "-$v" : '') . '.json', 21600);
         if (!$raw) continue; // gap or fetch problem — try next variant
         $cards = json_decode($raw, true);
         if (is_array($cards) && count($cards))
