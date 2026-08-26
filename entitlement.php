@@ -42,11 +42,23 @@ if (!$premium) {
                 // First activation → alert the owner: a new subscriber paid.
                 if (empty($user['owner_notified'])) {
                     $user['owner_notified'] = true;
+                    // Pull the payer's name/phone from Razorpay so the alert
+                    // identifies WHO subscribed, not just the login email.
+                    $cname = ''; $cphone = '';
+                    if (!empty($s['customer_id'])) {
+                        $ch2 = curl_init('https://api.razorpay.com/v1/customers/' . rawurlencode($s['customer_id']));
+                        curl_setopt_array($ch2, [CURLOPT_RETURNTRANSFER => true, CURLOPT_USERPWD => $key.':'.$secret, CURLOPT_TIMEOUT => 15]);
+                        $cr = json_decode((string)curl_exec($ch2), true); curl_close($ch2);
+                        $cname = $cr['name'] ?? ''; $cphone = $cr['contact'] ?? '';
+                    }
+                    $who = $cname !== '' ? $cname : $email;
                     $h = "MIME-Version: 1.0\r\nContent-Type: text/html; charset=UTF-8\r\nFrom: FlashGenius <no-reply@netmock.com>\r\n";
-                    @mail('netmockias@gmail.com',
-                        'New FlashGenius subscriber: ' . $email,
+                    @mail('netmockprep@gmail.com',
+                        'New FlashGenius subscriber: ' . $who,
                         '<div style="font-family:sans-serif"><h3>New ₹199/month subscriber 🎉</h3>'
-                        . '<p><b>Email:</b> ' . htmlspecialchars($email) . '<br>'
+                        . '<p><b>Name:</b> ' . htmlspecialchars($cname !== '' ? $cname : '(not provided)') . '<br>'
+                        . '<b>Email:</b> ' . htmlspecialchars($email) . '<br>'
+                        . '<b>Phone:</b> ' . htmlspecialchars($cphone !== '' ? $cphone : '(not provided)') . '<br>'
                         . '<b>Subscription:</b> ' . htmlspecialchars($subId) . '<br>'
                         . '<b>Status:</b> ' . htmlspecialchars($status) . '<br>'
                         . '<b>Paid till:</b> ' . date('d M Y', $end) . '</p></div>', $h);
