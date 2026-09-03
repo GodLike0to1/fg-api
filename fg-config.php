@@ -82,18 +82,25 @@ function fg_resolve_paid_access($email, $user) {
         $r = json_decode((string)curl_exec($ch), true); curl_close($ch);
         return is_array($r) ? $r : [];
     };
+    // Gather every subscription for this student: the id on file PLUS all subs
+    // stamped with this email. A student can have several (e.g. a paid one that
+    // was cancelled, then a fresh unpaid one created by re-tapping Subscribe) —
+    // we must pick the one that actually carries paid access.
+    $cands = [];
     $subId = $user['subscription_id'] ?? ($user['pending_subscription'] ?? null);
-    $sub = $subId ? $get('/subscriptions/' . rawurlencode($subId)) : [];
-    if (empty($sub['id'])) {
-        // Local record has no usable id → find it by the email we stamped into notes.
-        $sub = []; $best = 0;
-        $list = $get('/subscriptions?count=100');
-        foreach (($list['items'] ?? []) as $it) {
-            if (strtolower(trim($it['notes']['email'] ?? '')) !== $email) continue;
-            $score = ((int)($it['paid_count'] ?? 0) > 0 ? 1e12 : 0) + (int)($it['created_at'] ?? 0);
-            if ($score > $best) { $best = $score; $sub = $it; }
-        }
-        if (empty($sub['id'])) { $out['why'] = 'no subscription found for email'; return $out; }
+    if ($subId) { $d0 = $get('/subscriptions/' . rawurlencode($subId)); if (!empty($d0['id'])) $cands[$d0['id']] = $d0; }
+    $list = $get('/subscriptions?count=100');
+    foreach (($list['items'] ?? []) as $it) {
+        if (strtolower(trim($it['notes']['email'] ?? '')) === $email && !empty($it['id'])) $cands[$it['id']] = $it;
+    }
+    if (!$cands) { $out['why'] = 'no subscription found for email'; return $out; }
+    // Rank: live > paid (most recent) > unpaid (most recent).
+    $sub = []; $best = -1;
+    foreach ($cands as $it) {
+        $live = in_array($it['status'] ?? '', ['active', 'authenticated'], true) ? 2e12 : 0;
+        $paid = (int)($it['paid_count'] ?? 0) > 0 ? 1e12 : 0;
+        $score = $live + $paid + (int)($it['created_at'] ?? 0);
+        if ($score > $best) { $best = $score; $sub = $it; }
     }
     $out['sub'] = $sub; $out['sub_id'] = $sub['id'];
     $status = $sub['status'] ?? '';
