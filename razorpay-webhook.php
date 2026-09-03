@@ -33,6 +33,16 @@ if ($event === 'subscription.charged' || $event === 'subscription.activated') {
     fg_save_user($email, $user);
 } elseif ($event === 'subscription.cancelled') {
     $user['cancelled'] = date('c');                 // premium runs to expiry, no renewal
+    // If the student already paid for the current period, make sure the paid
+    // access survives the cancellation (cancel-after-first-charge case).
+    $paid = (int)($sub['paid_count'] ?? 0);
+    $end = !empty($sub['current_end']) ? (int)$sub['current_end'] : 0;
+    if ($paid >= 1 && $end > time()) {
+        $cur = isset($user['premium_until']) ? strtotime($user['premium_until']) : 0;
+        if ($end + 24 * 3600 > $cur) $user['premium_until'] = date('c', $end + 24 * 3600); // 1-day grace
+        $user['subscription_id'] = $sub['id'] ?? ($user['subscription_id'] ?? null);
+        unset($user['pending_subscription']);
+    }
     fg_save_user($email, $user);
 }
 

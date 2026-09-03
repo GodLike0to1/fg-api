@@ -31,13 +31,25 @@ if (!$premium) {
             $resp = curl_exec($ch); curl_close($ch);
             $s = json_decode((string)$resp, true);
             $status = $s['status'] ?? '';
+            $paidCount = (int)($s['paid_count'] ?? 0);
+            $curEnd = !empty($s['current_end']) ? (int)$s['current_end'] : 0;
+            // Grant when the subscription is live, OR when it is cancelled/stopped
+            // but the student already PAID for the current period (e.g. cancelled
+            // auto-debit right after the first charge — access still runs 30 days).
+            $grant = false; $end = 0;
             if (in_array($status, ['active', 'authenticated'], true)) {
-                // current_end = end of the paid period (epoch); fall back to +31d.
-                $end = !empty($s['current_end']) ? (int)$s['current_end'] : (time() + 31 * 24 * 3600);
+                $end = $curEnd ?: (time() + 31 * 24 * 3600);
                 if ($end < time()) $end = time() + 31 * 24 * 3600; // authenticated but not yet charged
+                $grant = true;
+            } elseif ($paidCount >= 1) {
+                $end = $curEnd ?: (!empty($s['ended_at']) ? (int)$s['ended_at'] + 31 * 24 * 3600 : 0);
+                if ($end > time()) $grant = true;
+            }
+            if ($grant) {
                 $user['premium_until'] = date('c', $end + 24 * 3600); // 1-day grace
                 $user['subscription_id'] = $subId;
                 $user['source'] = 'razorpay_web';
+                if ($status === 'cancelled') $user['cancelled'] = $user['cancelled'] ?? date('c'); // paid period runs out, no renewal
                 unset($user['pending_subscription']);
                 // First activation → alert the owner: a new subscriber paid.
                 if (empty($user['owner_notified'])) {
