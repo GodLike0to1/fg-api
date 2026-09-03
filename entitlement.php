@@ -2,8 +2,10 @@
 /**
  * POST {email, session} → {premium, premiumUntil, source}.
  * Called by the app on every launch. Webhook-independent: if local premium is
- * missing/expired but a subscription exists, we ask Razorpay directly and
- * extend. So the first payment AND renewals both work even before any webhook.
+ * missing/expired, we ask Razorpay directly (fg_resolve_paid_access) — this
+ * covers first payment, renewals, AND cancelled-after-paying (access runs to
+ * the end of the paid period), and it finds the subscription by email even if
+ * the local record lost the id.
  */
 require __DIR__ . '/fg-config.php';
 fg_preflight();
@@ -19,67 +21,42 @@ $user = fg_load_user($email) ?: [];
 $until = $user['premium_until'] ?? null;
 $premium = $until && strtotime($until) > time();
 
-// Not premium locally? Check Razorpay for a live subscription on this email.
 if (!$premium) {
-    $subId = $user['subscription_id'] ?? ($user['pending_subscription'] ?? null);
-    if ($subId) {
-        $sec = fg_secrets();
-        $key = $sec['razorpay_key_id'] ?? ''; $secret = $sec['razorpay_key_secret'] ?? '';
-        if ($key && $secret) {
-            $ch = curl_init('https://api.razorpay.com/v1/subscriptions/' . rawurlencode($subId));
-            curl_setopt_array($ch, [CURLOPT_RETURNTRANSFER => true, CURLOPT_USERPWD => $key.':'.$secret, CURLOPT_TIMEOUT => 20]);
-            $resp = curl_exec($ch); curl_close($ch);
-            $s = json_decode((string)$resp, true);
-            $status = $s['status'] ?? '';
-            $paidCount = (int)($s['paid_count'] ?? 0);
-            $curEnd = !empty($s['current_end']) ? (int)$s['current_end'] : 0;
-            // Grant when the subscription is live, OR when it is cancelled/stopped
-            // but the student already PAID for the current period (e.g. cancelled
-            // auto-debit right after the first charge — access still runs 30 days).
-            $grant = false; $end = 0;
-            if (in_array($status, ['active', 'authenticated'], true)) {
-                $end = $curEnd ?: (time() + 31 * 24 * 3600);
-                if ($end < time()) $end = time() + 31 * 24 * 3600; // authenticated but not yet charged
-                $grant = true;
-            } elseif ($paidCount >= 1) {
-                $end = $curEnd ?: (!empty($s['ended_at']) ? (int)$s['ended_at'] + 31 * 24 * 3600 : 0);
-                if ($end > time()) $grant = true;
+    $r = fg_resolve_paid_access($email, $user);
+    if ($r['grant']) {
+        $s = $r['sub']; $end = $r['end']; $subId = $r['sub_id']; $status = $s['status'] ?? '';
+        $user['premium_until'] = date('c', $end + 24 * 3600); // 1-day grace
+        $user['subscription_id'] = $subId;
+        $user['source'] = 'razorpay_web';
+        if ($status === 'cancelled') $user['cancelled'] = $user['cancelled'] ?? date('c'); // paid period runs out, no renewal
+        unset($user['pending_subscription']);
+        // First activation → alert the owner: a new subscriber paid.
+        if (empty($user['owner_notified'])) {
+            $user['owner_notified'] = true;
+            $sec = fg_secrets();
+            $key = $sec['razorpay_key_id'] ?? ''; $secret = $sec['razorpay_key_secret'] ?? '';
+            $cname = ''; $cphone = '';
+            if (!empty($s['customer_id']) && $key && $secret) {
+                $ch2 = curl_init('https://api.razorpay.com/v1/customers/' . rawurlencode($s['customer_id']));
+                curl_setopt_array($ch2, [CURLOPT_RETURNTRANSFER => true, CURLOPT_USERPWD => $key.':'.$secret, CURLOPT_TIMEOUT => 15]);
+                $cr = json_decode((string)curl_exec($ch2), true); curl_close($ch2);
+                $cname = $cr['name'] ?? ''; $cphone = $cr['contact'] ?? '';
             }
-            if ($grant) {
-                $user['premium_until'] = date('c', $end + 24 * 3600); // 1-day grace
-                $user['subscription_id'] = $subId;
-                $user['source'] = 'razorpay_web';
-                if ($status === 'cancelled') $user['cancelled'] = $user['cancelled'] ?? date('c'); // paid period runs out, no renewal
-                unset($user['pending_subscription']);
-                // First activation → alert the owner: a new subscriber paid.
-                if (empty($user['owner_notified'])) {
-                    $user['owner_notified'] = true;
-                    // Pull the payer's name/phone from Razorpay so the alert
-                    // identifies WHO subscribed, not just the login email.
-                    $cname = ''; $cphone = '';
-                    if (!empty($s['customer_id'])) {
-                        $ch2 = curl_init('https://api.razorpay.com/v1/customers/' . rawurlencode($s['customer_id']));
-                        curl_setopt_array($ch2, [CURLOPT_RETURNTRANSFER => true, CURLOPT_USERPWD => $key.':'.$secret, CURLOPT_TIMEOUT => 15]);
-                        $cr = json_decode((string)curl_exec($ch2), true); curl_close($ch2);
-                        $cname = $cr['name'] ?? ''; $cphone = $cr['contact'] ?? '';
-                    }
-                    $who = $cname !== '' ? $cname : $email;
-                    $h = "MIME-Version: 1.0\r\nContent-Type: text/html; charset=UTF-8\r\nFrom: FlashGenius <no-reply@netmock.com>\r\n";
-                    @mail('netmockprep@gmail.com',
-                        'New FlashGenius subscriber: ' . $who,
-                        '<div style="font-family:sans-serif"><h3>New ₹199/month subscriber 🎉</h3>'
-                        . '<p><b>Name:</b> ' . htmlspecialchars($cname !== '' ? $cname : '(not provided)') . '<br>'
-                        . '<b>Email:</b> ' . htmlspecialchars($email) . '<br>'
-                        . '<b>Phone:</b> ' . htmlspecialchars($cphone !== '' ? $cphone : '(not provided)') . '<br>'
-                        . '<b>Subscription:</b> ' . htmlspecialchars($subId) . '<br>'
-                        . '<b>Status:</b> ' . htmlspecialchars($status) . '<br>'
-                        . '<b>Paid till:</b> ' . date('d M Y', $end) . '</p></div>', $h);
-                }
-                fg_save_user($email, $user);
-                $until = $user['premium_until'];
-                $premium = true;
-            }
+            $who = $cname !== '' ? $cname : $email;
+            $h = "MIME-Version: 1.0\r\nContent-Type: text/html; charset=UTF-8\r\nFrom: FlashGenius <no-reply@netmock.com>\r\n";
+            @mail('netmockprep@gmail.com',
+                'New FlashGenius subscriber: ' . $who,
+                '<div style="font-family:sans-serif"><h3>New ₹199/month subscriber 🎉</h3>'
+                . '<p><b>Name:</b> ' . htmlspecialchars($cname !== '' ? $cname : '(not provided)') . '<br>'
+                . '<b>Email:</b> ' . htmlspecialchars($email) . '<br>'
+                . '<b>Phone:</b> ' . htmlspecialchars($cphone !== '' ? $cphone : '(not provided)') . '<br>'
+                . '<b>Subscription:</b> ' . htmlspecialchars((string)$subId) . '<br>'
+                . '<b>Status:</b> ' . htmlspecialchars($status) . '<br>'
+                . '<b>Paid till:</b> ' . date('d M Y', $end) . '</p></div>', $h);
         }
+        fg_save_user($email, $user);
+        $until = $user['premium_until'];
+        $premium = true;
     }
 }
 

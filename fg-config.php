@@ -66,6 +66,56 @@ function fg_check_session($email, $token) {
     return hash_equals($want, $mac);
 }
 
+// Resolve a student's paid access from Razorpay, robustly:
+//  - finds the subscription even if the local record lost its id (scans by notes.email)
+//  - grants for live subs, AND for cancelled/stopped subs whose paid period still runs
+//  - period end: current_end → ended_at+31d → current_start+31d → created_at+31d
+// Returns ['grant'=>bool,'end'=>epoch,'sub'=>array|null,'sub_id'=>string|null,'why'=>string].
+function fg_resolve_paid_access($email, $user) {
+    $sec = fg_secrets();
+    $key = $sec['razorpay_key_id'] ?? ''; $secret = $sec['razorpay_key_secret'] ?? '';
+    $out = ['grant' => false, 'end' => 0, 'sub' => null, 'sub_id' => null, 'why' => ''];
+    if (!$key || !$secret) { $out['why'] = 'no razorpay keys'; return $out; }
+    $get = function ($path) use ($key, $secret) {
+        $ch = curl_init('https://api.razorpay.com/v1' . $path);
+        curl_setopt_array($ch, [CURLOPT_RETURNTRANSFER => true, CURLOPT_USERPWD => $key.':'.$secret, CURLOPT_TIMEOUT => 20]);
+        $r = json_decode((string)curl_exec($ch), true); curl_close($ch);
+        return is_array($r) ? $r : [];
+    };
+    $subId = $user['subscription_id'] ?? ($user['pending_subscription'] ?? null);
+    $sub = $subId ? $get('/subscriptions/' . rawurlencode($subId)) : [];
+    if (empty($sub['id'])) {
+        // Local record has no usable id → find it by the email we stamped into notes.
+        $sub = []; $best = 0;
+        $list = $get('/subscriptions?count=100');
+        foreach (($list['items'] ?? []) as $it) {
+            if (strtolower(trim($it['notes']['email'] ?? '')) !== $email) continue;
+            $score = ((int)($it['paid_count'] ?? 0) > 0 ? 1e12 : 0) + (int)($it['created_at'] ?? 0);
+            if ($score > $best) { $best = $score; $sub = $it; }
+        }
+        if (empty($sub['id'])) { $out['why'] = 'no subscription found for email'; return $out; }
+    }
+    $out['sub'] = $sub; $out['sub_id'] = $sub['id'];
+    $status = $sub['status'] ?? '';
+    $paid = (int)($sub['paid_count'] ?? 0);
+    $d = 31 * 24 * 3600;
+    $end = !empty($sub['current_end']) ? (int)$sub['current_end'] : 0;
+    if (in_array($status, ['active', 'authenticated'], true)) {
+        if (!$end || $end < time()) $end = time() + $d;
+        $out['grant'] = true; $out['why'] = 'live subscription';
+    } elseif ($paid >= 1) {
+        if (!$end && !empty($sub['ended_at']))      $end = (int)$sub['ended_at'] + $d;
+        if (!$end && !empty($sub['current_start'])) $end = (int)$sub['current_start'] + $d;
+        if (!$end && !empty($sub['created_at']))    $end = (int)$sub['created_at'] + $d;
+        if ($end > time()) { $out['grant'] = true; $out['why'] = "paid period still running (status $status)"; }
+        else $out['why'] = "paid period over (status $status)";
+    } else {
+        $out['why'] = "not paid (status $status, paid_count $paid)";
+    }
+    $out['end'] = $end;
+    return $out;
+}
+
 function fg_json($code, $arr) {
     http_response_code($code);
     header('Content-Type: application/json; charset=utf-8');
