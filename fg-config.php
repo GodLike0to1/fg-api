@@ -103,6 +103,24 @@ function fg_resolve_paid_access($email, $user) {
         if ($score > $best) { $best = $score; $sub = $it; }
     }
     $out['sub'] = $sub; $out['sub_id'] = $sub['id'];
+    // Answer Writing (₹999) tier: any live/paid AW subscription grants aw_* too.
+    $awPlan = is_readable(__DIR__ . '/data/plan_aw_id.txt') ? trim(file_get_contents(__DIR__ . '/data/plan_aw_id.txt')) : '';
+    $out['aw_grant'] = false; $out['aw_end'] = 0; $out['aw_sub_id'] = null;
+    foreach ($cands as $it) {
+        $isAw = (($it['notes']['product'] ?? '') === 'flashgenius_aw') || ($awPlan && ($it['plan_id'] ?? '') === $awPlan);
+        if (!$isAw) continue;
+        $st = $it['status'] ?? ''; $pc = (int)($it['paid_count'] ?? 0); $d31 = 31 * 24 * 3600;
+        $e = !empty($it['current_end']) ? (int)$it['current_end'] : 0;
+        $g = false;
+        if (in_array($st, ['active', 'authenticated'], true)) { if (!$e || $e < time()) $e = time() + $d31; $g = true; }
+        elseif ($pc >= 1) {
+            if (!$e && !empty($it['ended_at']))      $e = (int)$it['ended_at'] + $d31;
+            if (!$e && !empty($it['current_start'])) $e = (int)$it['current_start'] + $d31;
+            if (!$e && !empty($it['created_at']))    $e = (int)$it['created_at'] + $d31;
+            $g = $e > time();
+        }
+        if ($g && $e > $out['aw_end']) { $out['aw_grant'] = true; $out['aw_end'] = $e; $out['aw_sub_id'] = $it['id']; }
+    }
     $status = $sub['status'] ?? '';
     $paid = (int)($sub['paid_count'] ?? 0);
     $d = 31 * 24 * 3600;

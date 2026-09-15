@@ -11,6 +11,7 @@ if ($_SERVER['REQUEST_METHOD'] !== 'POST') fg_json(405, ['error' => 'POST only']
 $b = fg_body();
 $email = strtolower(trim($b['email'] ?? ''));
 if (!$email || !filter_var($email, FILTER_VALIDATE_EMAIL)) fg_json(400, ['error' => 'Valid email required']);
+$isAw = (($b['plan'] ?? '') === 'aw');
 
 $sec = fg_secrets();
 $key = $sec['razorpay_key_id'] ?? '';
@@ -34,20 +35,23 @@ function rzp($method, $path, $payload, $key, $secret) {
 }
 
 // Find or create the ₹199/month plan. Cached in a local file after first run.
-$planFile = __DIR__ . '/data/plan_id.txt';
+$planFile = __DIR__ . ($isAw ? '/data/plan_aw_id.txt' : '/data/plan_id.txt');
 $planId = is_readable($planFile) ? trim(file_get_contents($planFile)) : '';
 if (!$planId) {
     [$c, $list] = rzp('GET', '/plans?count=100', null, $key, $secret);
     if ($c === 200 && !empty($list['items'])) {
         foreach ($list['items'] as $p) {
-            if (($p['period'] ?? '') === 'monthly' && (int)($p['item']['amount'] ?? 0) === 19900) { $planId = $p['id']; break; }
+            if (($p['period'] ?? '') === 'monthly' && (int)($p['item']['amount'] ?? 0) === ($isAw ? 99900 : 19900)) { $planId = $p['id']; break; }
         }
     }
     if (!$planId) {
         [$c2, $p] = rzp('POST', '/plans', [
             'period' => 'monthly', 'interval' => 1,
-            'item' => ['name' => 'FlashGenius Premium — Monthly', 'amount' => 19900, 'currency' => 'INR',
-                       'description' => 'Unlimited MCQs, all chapters, UPSC/UPPCS/NCERT'],
+            'item' => $isAw
+                ? ['name' => 'FlashGenius Answer Writing + Premium — Monthly', 'amount' => 99900, 'currency' => 'INR',
+                   'description' => 'Daily answer evaluation (1 answer/day, marks out of 10) + all MCQ chapters']
+                : ['name' => 'FlashGenius Premium — Monthly', 'amount' => 19900, 'currency' => 'INR',
+                   'description' => 'Unlimited MCQs, all chapters, UPSC/UPPCS/NCERT'],
         ], $key, $secret);
         if ($c2 < 200 || $c2 >= 300 || empty($p['id'])) {
             fg_json(502, ['error' => $p['error']['description'] ?? 'Could not create plan']);
@@ -62,7 +66,7 @@ if (!$planId) {
     'plan_id' => $planId,
     'total_count' => 120,
     'customer_notify' => 1,
-    'notes' => ['email' => $email, 'product' => 'flashgenius_premium'],
+    'notes' => ['email' => $email, 'product' => $isAw ? 'flashgenius_aw' : 'flashgenius_premium'],
 ], $key, $secret);
 if ($c3 < 200 || $c3 >= 300 || empty($j['id'])) {
     fg_json(502, ['error' => $j['error']['description'] ?? 'Could not create subscription']);

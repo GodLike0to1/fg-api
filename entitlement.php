@@ -60,8 +60,14 @@ if (!$premium) {
     }
 }
 
+// Answer Writing tier (₹999): cached on the record, re-resolved when missing/expired.
+require_once __DIR__ . '/aw-lib.php';
+$aw = aw_entitled($email, $user);
+if ($aw && !$premium) { $premium = true; $until = $user['premium_until'] ?? $user['aw_until']; }
 fg_json(200, [
     'premium' => $premium,
     'premiumUntil' => $until,
+    'aw' => $aw,
+    'awUntil' => $user['aw_until'] ?? null,
     'source' => $user['source'] ?? null,
 ]);

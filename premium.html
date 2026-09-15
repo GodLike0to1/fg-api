@@ -42,8 +42,18 @@
 const API = 'https://netmock.com/fg-api';
 // Opened from the app: ?email=... prefills the Gmail and starts checkout
 // immediately, so the student lands straight on the UPI app buttons.
+const PLAN = (new URLSearchParams(location.search).get('plan') === 'aw') ? 'aw' : 'premium';
+const PRICE = PLAN === 'aw' ? 999 : 199;
 window.addEventListener('DOMContentLoaded', () => {
   try {
+    if (PLAN === 'aw') {
+      document.title = 'FlashGenius Answer Writing — ₹999/month';
+      document.querySelector('h1').textContent = 'FlashGenius Answer Writing';
+      document.querySelector('.card > p').innerHTML = 'Write one answer a day, upload it, get it evaluated by an examiner-style rubric within 30 minutes: marks out of 10, what you missed, and a model outline. <b>Includes all MCQ Premium chapters.</b>';
+      document.querySelector('.price').textContent = '₹999';
+      document.getElementById('pay').textContent = 'Subscribe — ₹999/month';
+      document.querySelector('.note').innerHTML = document.querySelector('.note').innerHTML.replace('₹199', '₹999');
+    }
     const em = new URLSearchParams(location.search).get('email');
     if (em && /^[^@\s]+@[^@\s]+\.[^@\s]+$/.test(em)) {
       const inp = document.getElementById('email');
@@ -64,15 +74,15 @@ async function startPay(){
   try{
     const r = await fetch(API + '/create-subscription.php', {
       method:'POST', headers:{'Content-Type':'application/json'},
-      body: JSON.stringify({email})
+      body: JSON.stringify({email, plan: PLAN})
     });
     const j = await r.json();
     if(!r.ok) throw new Error(j.error || 'Could not start checkout');
     const rzp = new Razorpay({
       key: j.keyId,
       subscription_id: j.subscriptionId,
-      name: 'NetMock — FlashGenius Premium',
-      description: '₹199/month · UPI AutoPay',
+      name: PLAN === 'aw' ? 'NetMock — FlashGenius Answer Writing' : 'NetMock — FlashGenius Premium',
+      description: '₹' + PRICE + '/month · UPI AutoPay',
       prefill: { email },
       theme: { color: '#7c3aed' },
       handler: function(){
@@ -82,7 +92,7 @@ async function startPay(){
     });
     rzp.open();
   }catch(e){ err.textContent = e.message; }
-  btn.disabled = false; btn.textContent = 'Subscribe — ₹199/month';
+  btn.disabled = false; btn.textContent = 'Subscribe — ₹' + PRICE + '/month';
 }
 </script>
 </body>
