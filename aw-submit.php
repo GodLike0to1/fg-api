@@ -1,7 +1,7 @@
 <?php
 /**
  * POST {email, session, question, custom, files:[{type, base64, name}]}
- * One submission per student per IST day. Files: JPEG/PNG/PDF, max 6, 12 MB total.
+ * One submission per student per IST day. Files: up to 2 photos (JPEG/PNG) or one PDF, 12 MB total.
  * Stores the upload, marks it pending, kicks the evaluator in the background.
  * → {ok, date, readyAt}
  */
@@ -26,7 +26,9 @@ $question = mb_substr($question, 0, 1200);
 
 $files = $b['files'] ?? [];
 if (!is_array($files) || !count($files)) fg_json(400, ['error' => 'Upload your answer (photo or PDF)']);
-if (count($files) > 6) fg_json(400, ['error' => 'Maximum 6 pages per answer']);
+if (count($files) > 2) fg_json(400, ['error' => 'Maximum 2 pages per answer (or one PDF)']);
+$pdfs = 0; foreach ($files as $f) if (strtolower((string)($f['type'] ?? '')) === 'application/pdf') $pdfs++;
+if ($pdfs && count($files) > 1) fg_json(400, ['error' => 'Upload either one PDF or up to 2 photos']);
 $allowed = ['image/jpeg' => 'jpg', 'image/png' => 'png', 'image/webp' => 'webp', 'application/pdf' => 'pdf'];
 $total = 0; $saved = [];
 $dir = aw_dir($email);

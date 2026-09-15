@@ -110,7 +110,7 @@ function aw_evaluate($meta, $dir, $KEY, $rules) {
 
     // 2) marking
     $max = (int)$rules['max_marks'];
-    $ePrompt = $rules['examiner_brief'] . "\n\nQUESTION (" . ($meta['gs'] ?: 'GS') . ", $max marks, {$rules['words_min']}-{$rules['words_max']} words):\n" . $meta['question']
+    $ePrompt = $rules['examiner_brief'] . "\n\nQUESTION (" . ($meta['gs'] ?: 'GS') . ", $max marks, 150 words):\n" . $meta['question']
         . "\n\nSTUDENT'S ANSWER (transcribed; the original pages are attached so you can also judge presentation, underlining and diagrams):\n" . $transcript
         . "\n\nReturn ONLY this JSON:\n{\"marks\": number out of $max in steps of 0.5, \"verdict\": \"Excellent | Good | Average | Needs Improvement\", \"demand_met\": \"one line: did it answer what was asked\", \"strengths\": [\"3 specific points\"], \"improvements\": [\"3 specific, actionable points\"], \"missed_points\": [\"key content the answer should have had\"], \"model_outline\": [\"8-10 crisp points an ideal answer would contain: intro, body points, conclusion\"], \"presentation\": \"one or two lines on handwriting, structure, underlining, diagrams\", \"examiner_remark\": \"2-3 sentence overall remark in the voice of an examiner\"}";
     $j = aw_json(aw_gemini($KEY, array_merge([['text' => $ePrompt]], $fileParts), 0.2, true));
@@ -121,14 +121,14 @@ function aw_evaluate($meta, $dir, $KEY, $rules) {
     $deductions = []; $notes = [];
     if ($words > (int)$rules['words_max']) {
         $pen = (float)$rules['over_penalty'];
-        if ($pen > 0) $deductions[] = ['rule' => 'word_limit', 'marks' => $pen, 'text' => "Word limit exceeded: $words words against the {$rules['words_min']}-{$rules['words_max']} limit. $pen mark deducted."];
-        else $notes[] = "Word limit exceeded: $words words against the {$rules['words_min']}-{$rules['words_max']} limit.";
+        if ($pen > 0) $deductions[] = ['rule' => 'word_limit', 'marks' => $pen, 'text' => "Word limit exceeded: $words words for a 150-word answer. $pen mark deducted."];
+        else $notes[] = "Word limit exceeded: $words words for a 150-word answer.";
     } elseif ($words < (int)$rules['words_min']) {
         $pen = (float)$rules['under_penalty'];
-        if ($pen > 0) $deductions[] = ['rule' => 'word_limit', 'marks' => $pen, 'text' => "Answer is short: $words words; the expected length is {$rules['words_min']}-{$rules['words_max']} words. $pen mark deducted."];
-        else $notes[] = "Answer is short: $words words; the expected length is {$rules['words_min']}-{$rules['words_max']} words. Add one more dimension or example to reach the mark.";
+        if ($pen > 0) $deductions[] = ['rule' => 'word_limit', 'marks' => $pen, 'text' => "Answer is short: $words words for a 150-word answer. $pen mark deducted."];
+        else $notes[] = "Answer is short: $words words for a 150-word answer. Add one more dimension or example.";
     } else {
-        $notes[] = "Word count $words: within the {$rules['words_min']}-{$rules['words_max']} limit.";
+        $notes[] = "Word count $words: within the limit for a 150-word answer.";
     }
     $ded = 0; foreach ($deductions as $d) $ded += $d['marks'];
     $final = max(0, $raw - $ded);
