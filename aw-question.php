@@ -18,7 +18,14 @@ if (is_array($bank)) {
 }
 if (!$pick) $pick = ['date' => $today, 'q' => 'Discuss the significance of the Directive Principles of State Policy in shaping welfare legislation in India.', 'gs' => 'GS2'];
 $rules = aw_rules();
+// 'ready' tells the app whether evaluation is actually configured on this
+// server (Gemini key + worker token). The app keeps Answer Writing as
+// "Coming soon" until this is true, so nobody can be charged for a service
+// that cannot deliver a result.
+$sec = fg_secrets();
+$ready = !empty($sec['gemini_api_key']) && !empty($sec['aw_worker_token']);
 fg_json(200, [
+    'ready' => $ready,
     'date' => $today,
     'question' => $pick['q'],
     'gs' => $pick['gs'] ?? '',
