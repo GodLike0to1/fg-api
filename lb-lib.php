@@ -109,6 +109,11 @@ function lb_me($board, $email) {
     if ($u && !empty($u['hide'])) return ['hidden' => true, 'points' => round((float)$u['points'], 2), 'tests' => (int)$u['tests']];
     return null;
 }
+function lb_mine($email) { // caller-only extras shipped next to 'me'
+    $u = lb_load_user($email) ?: [];
+    $prem = lb_is_premium($email);
+    return ['streak' => lb_streak_view($u, $prem), 'subjects' => lb_subjects_view($u), 'premium' => $prem];
+}
 function lb_public($board, $email) {
     $cfg = lb_cfg();
     $rows = array_slice($board['rows'], 0, (int)$cfg['top_n']);
@@ -118,6 +123,63 @@ function lb_public($board, $email) {
         'testsAll' => $board['testsAll'], 'testsMonth' => $board['testsMonth'],
         'rows' => array_map($strip, $rows), 'mentors' => array_map($strip, $board['mentors']),
         'me' => $email ? lb_me($board, $email) : null,
+        'mine' => $email ? lb_mine($email) : null,
+        'toppers' => array_map($strip, array_slice($board['rows'], 0, 10)),
         'builtAt' => $board['builtAt'],
     ];
+}
+
+// ---- Daily streak (IST). One finished test a day keeps it alive. Premium
+// students get ONE automatic freeze per ISO week: a single missed day does
+// not break the chain. Stored on the lb user record as
+//   streak: {days, best, last:'Y-m-d', freezeWeek:'o-W', frozen:['Y-m-d', ...]}
+function lb_ist_date($ts = null) { return (new DateTime('@' . ($ts ?? time())))->setTimezone(new DateTimeZone('Asia/Kolkata'))->format('Y-m-d'); }
+function lb_touch_streak(&$u, $premium) {
+    $st = $u['streak'] ?? ['days' => 0, 'best' => 0, 'last' => null, 'freezeWeek' => null, 'frozen' => []];
+    $today = lb_ist_date();
+    if (($st['last'] ?? null) === $today) { $u['streak'] = $st; return $st; }
+    $y1 = lb_ist_date(time() - 86400); $y2 = lb_ist_date(time() - 2 * 86400);
+    $week = (new DateTime('now', new DateTimeZone('Asia/Kolkata')))->format('o-W');
+    $usedFreeze = false;
+    if ($st['last'] === $y1) $st['days'] = (int)$st['days'] + 1;
+    elseif ($premium && $st['last'] === $y2 && ($st['freezeWeek'] ?? null) !== $week) {
+        $st['days'] = (int)$st['days'] + 1; $st['freezeWeek'] = $week; $st['frozen'][] = $y1; $usedFreeze = true;
+        $st['frozen'] = array_slice($st['frozen'], -30);
+    } else $st['days'] = 1;
+    $st['last'] = $today;
+    $st['best'] = max((int)($st['best'] ?? 0), (int)$st['days']);
+    $st['freezeUsedNow'] = $usedFreeze;
+    $st['freezeAvailable'] = $premium && ($st['freezeWeek'] ?? null) !== $week;
+    $u['streak'] = $st;
+    return $st;
+}
+// Streak as the app should display it right now (a chain that was not
+// continued yesterday is already broken, even before today's test).
+function lb_streak_view($u, $premium) {
+    $st = $u['streak'] ?? null;
+    if (!$st) return ['days' => 0, 'best' => 0, 'today' => false, 'freezeAvailable' => $premium];
+    $today = lb_ist_date(); $y1 = lb_ist_date(time() - 86400); $y2 = lb_ist_date(time() - 2 * 86400);
+    $week = (new DateTime('now', new DateTimeZone('Asia/Kolkata')))->format('o-W');
+    $freezeAvail = $premium && ($st['freezeWeek'] ?? null) !== $week;
+    $alive = $st['last'] === $today || $st['last'] === $y1 || ($freezeAvail && $st['last'] === $y2);
+    return ['days' => $alive ? (int)$st['days'] : 0, 'best' => (int)($st['best'] ?? 0), 'today' => $st['last'] === $today,
+            'atRisk' => $alive && $st['last'] !== $today, 'freezeAvailable' => $freezeAvail, 'last' => $st['last']];
+}
+// Is this student premium right now (paid, Answer Writing or referral trial)?
+function lb_is_premium($email) {
+    $f = fg_load_user($email); if (!$f) return false;
+    foreach (['premium_until', 'aw_until', 'trial_until'] as $k) if (!empty($f[$k]) && strtotime($f[$k]) > time()) return true;
+    return false;
+}
+// Per-subject accuracy → weak areas. subjects: {"UPSC Prelims|Polity": {correct,wrong,skipped,tests}}
+function lb_subjects_view($u) {
+    $out = [];
+    foreach (($u['subjects'] ?? []) as $k => $v) {
+        $ans = (int)$v['correct'] + (int)$v['wrong'];
+        [$cls, $sub] = array_pad(explode('|', $k, 2), 2, '');
+        $out[] = ['cls' => $cls, 'subject' => $sub, 'tests' => (int)$v['tests'], 'answered' => $ans,
+                  'accuracy' => $ans ? (int)round(100 * (int)$v['correct'] / $ans) : 0];
+    }
+    usort($out, function ($a, $b) { return $a['accuracy'] <=> $b['accuracy'] ?: $b['answered'] <=> $a['answered']; });
+    return $out;
 }

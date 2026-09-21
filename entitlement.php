@@ -60,6 +60,11 @@ if (!$premium) {
     }
 }
 
+// Referral trial (7 days per invited friend, auto-expires: nothing to switch off).
+require_once __DIR__ . '/ref-lib.php';
+$trial = false;
+if (!$premium && ref_trial_active($user)) { $premium = true; $trial = true; $until = $user['trial_until']; }
+
 // Answer Writing tier (₹999): cached on the record, re-resolved when missing/expired.
 require_once __DIR__ . '/aw-lib.php';
 $aw = aw_entitled($email, $user);
@@ -69,5 +74,7 @@ fg_json(200, [
     'premiumUntil' => $until,
     'aw' => $aw,
     'awUntil' => $user['aw_until'] ?? null,
-    'source' => $user['source'] ?? null,
+    'trial' => $trial,
+    'trialUntil' => $user['trial_until'] ?? null,
+    'source' => $trial ? 'trial' : ($user['source'] ?? null),
 ]);
