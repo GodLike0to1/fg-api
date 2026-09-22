@@ -42,8 +42,11 @@
 const API = 'https://netmock.com/fg-api';
 // Opened from the app: ?email=... prefills the Gmail and starts checkout
 // immediately, so the student lands straight on the UPI app buttons.
-const PLAN = (new URLSearchParams(location.search).get('plan') === 'aw') ? 'aw' : 'premium';
-const PRICE = PLAN === 'aw' ? 999 : 199;
+const qp = new URLSearchParams(location.search).get('plan');
+const PLAN = qp === 'aw' ? 'aw' : (qp === 'q' || qp === 'y') ? qp : 'premium';
+const ONETIME = { q: { price: 799,  label: '3 months',  per: '₹266/month · one payment · no auto-debit' },
+                  y: { price: 1999, label: '12 months', per: 'till Prelims 2027 · less than ₹8 a day · one payment · no auto-debit' } };
+const PRICE = PLAN === 'aw' ? 999 : (ONETIME[PLAN] ? ONETIME[PLAN].price : 199);
 window.addEventListener('DOMContentLoaded', () => {
   try {
     if (PLAN === 'aw') {
@@ -53,6 +56,14 @@ window.addEventListener('DOMContentLoaded', () => {
       document.querySelector('.price').textContent = '₹999';
       document.getElementById('pay').textContent = 'Subscribe — ₹999/month';
       document.querySelector('.note').innerHTML = document.querySelector('.note').innerHTML.replace('₹199', '₹999');
+    }
+    if (ONETIME[PLAN]) {
+      const O = ONETIME[PLAN];
+      document.title = 'FlashGenius Premium — ' + O.label + ' ₹' + O.price;
+      document.querySelector('.price').textContent = '₹' + O.price.toLocaleString('en-IN');
+      document.querySelector('.per').textContent = O.label + ' · ' + O.per;
+      document.getElementById('pay').textContent = 'Pay ₹' + O.price.toLocaleString('en-IN') + ' once';
+      document.querySelector('.note').innerHTML = 'One-time payment of ₹' + O.price.toLocaleString('en-IN') + ' for ' + O.label + ' of Premium. Nothing is auto-debited and there is nothing to cancel. Support: netmockias@gmail.com · <a href="https://netmock.com/cancellation-and-refund-policy/">Refund policy</a>';
     }
     const em = new URLSearchParams(location.search).get('email');
     if (em && /^[^@\s]+@[^@\s]+\.[^@\s]+$/.test(em)) {
@@ -71,6 +82,32 @@ async function startPay(){
   err.textContent = '';
   if(!/^[^@\s]+@[^@\s]+\.[^@\s]+$/.test(email)){ err.textContent = 'Please enter the Gmail you use in the app.'; return; }
   btn.disabled = true; btn.textContent = 'Preparing…';
+  if (ONETIME[PLAN]) {
+    try{
+      const r = await fetch(API + '/create-order.php', { method:'POST', headers:{'Content-Type':'application/json'}, body: JSON.stringify({email, plan: PLAN}) });
+      const j = await r.json();
+      if(!r.ok) throw new Error(j.error || 'Could not start checkout');
+      const rzp = new Razorpay({
+        key: j.keyId, order_id: j.orderId, amount: j.amount, currency: 'INR',
+        name: 'NetMock — FlashGenius Premium', description: j.name,
+        prefill: { email }, theme: { color: '#7c3aed' },
+        handler: async function(res){
+          btn.textContent = 'Confirming…';
+          try {
+            const v = await fetch(API + '/verify-payment.php', { method:'POST', headers:{'Content-Type':'application/json'},
+              body: JSON.stringify({ email, razorpay_order_id: res.razorpay_order_id, razorpay_payment_id: res.razorpay_payment_id, razorpay_signature: res.razorpay_signature }) });
+            const vj = await v.json();
+            if (!v.ok) throw new Error(vj.error || 'Could not confirm');
+            document.getElementById('ok').textContent = '✅ Paid! Premium is active till ' + new Date(vj.premiumUntil).toLocaleDateString('en-IN', {day:'numeric', month:'short', year:'numeric'}) + '. Open FlashGenius and sign in with this Gmail.';
+          } catch (e) { document.getElementById('ok').textContent = '✅ Payment received. Open FlashGenius in a minute; Premium unlocks automatically.'; }
+          document.getElementById('ok').style.display = 'block'; btn.style.display = 'none';
+        }
+      });
+      rzp.open();
+    }catch(e){ err.textContent = e.message; }
+    btn.disabled = false; btn.textContent = 'Pay ₹' + ONETIME[PLAN].price.toLocaleString('en-IN') + ' once';
+    return;
+  }
   try{
     const r = await fetch(API + '/create-subscription.php', {
       method:'POST', headers:{'Content-Type':'application/json'},

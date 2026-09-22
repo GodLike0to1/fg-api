@@ -51,6 +51,11 @@ if ($subject !== '' && !$tooFast) {                  // weak-area stats (preview
     $sv = $u['subjects'][$k] ?? ['correct' => 0, 'wrong' => 0, 'skipped' => 0, 'tests' => 0];
     $sv['correct'] += $correct; $sv['wrong'] += $wrong; $sv['skipped'] += $skipped; if (!$preview) $sv['tests']++;
     $u['subjects'][$k] = $sv;
+    $mk2 = lb_month_key(time());
+    $mv = $u['subjectsMonth'][$mk2][$k] ?? ['correct' => 0, 'wrong' => 0];
+    $mv['correct'] += $correct; $mv['wrong'] += $wrong;
+    $u['subjectsMonth'][$mk2][$k] = $mv;
+    if (isset($u['subjectsMonth']) && count($u['subjectsMonth']) > 4) { ksort($u['subjectsMonth']); $u['subjectsMonth'] = array_slice($u['subjectsMonth'], -4, null, true); }
 }
 if (!empty($b['name'])) $u['name'] = lb_display_name($b['name'], $email);
 if (empty($u['name'])) $u['name'] = lb_display_name('', $email);

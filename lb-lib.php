@@ -109,10 +109,26 @@ function lb_me($board, $email) {
     if ($u && !empty($u['hide'])) return ['hidden' => true, 'points' => round((float)$u['points'], 2), 'tests' => (int)$u['tests']];
     return null;
 }
+// Month-over-month accuracy per subject. Needs >= 8 answers in both this
+// month and the previous one; returns best improvements first.
+function lb_progress_view($u) {
+    $cur = lb_month_key(time()); $prev = (new DateTime($cur . '-01'))->modify('-1 month')->format('Y-m');
+    $out = [];
+    foreach (($u['subjectsMonth'][$cur] ?? []) as $k => $v) {
+        $p = $u['subjectsMonth'][$prev][$k] ?? null; if (!$p) continue;
+        $a1 = (int)$v['correct'] + (int)$v['wrong']; $a0 = (int)$p['correct'] + (int)$p['wrong'];
+        if ($a1 < 8 || $a0 < 8) continue;
+        [$cls, $sub] = array_pad(explode('|', $k, 2), 2, '');
+        $from = (int)round(100 * (int)$p['correct'] / $a0); $to = (int)round(100 * (int)$v['correct'] / $a1);
+        $out[] = ['cls' => $cls, 'subject' => $sub, 'from' => $from, 'to' => $to, 'delta' => $to - $from, 'answered' => $a1];
+    }
+    usort($out, function ($a, $b) { return $b['delta'] <=> $a['delta']; });
+    return $out;
+}
 function lb_mine($email) { // caller-only extras shipped next to 'me'
     $u = lb_load_user($email) ?: [];
     $prem = lb_is_premium($email);
-    return ['streak' => lb_streak_view($u, $prem), 'subjects' => lb_subjects_view($u), 'premium' => $prem];
+    return ['streak' => lb_streak_view($u, $prem), 'subjects' => lb_subjects_view($u), 'progress' => lb_progress_view($u), 'premium' => $prem];
 }
 function lb_public($board, $email) {
     $cfg = lb_cfg();

@@ -21,13 +21,18 @@ $user = fg_load_user($email) ?: [];
 $until = $user['premium_until'] ?? null;
 $premium = $until && strtotime($until) > time();
 
+// One-time passes (3 / 12 months): apply any captured payment not yet applied.
+require_once __DIR__ . '/onetime-lib.php';
+if (!$premium) {
+    if (fg_onetime_resolve($email, $user)) { fg_save_user($email, $user); $until = $user['premium_until']; $premium = strtotime($until) > time(); }
+}
 if (!$premium) {
     $r = fg_resolve_paid_access($email, $user);
     if ($r['grant']) {
         $s = $r['sub']; $end = $r['end']; $subId = $r['sub_id']; $status = $s['status'] ?? '';
         $user['premium_until'] = date('c', $end + 24 * 3600); // 1-day grace
         $user['subscription_id'] = $subId;
-        $user['source'] = 'razorpay_web';
+        $user['source'] = 'razorpay_web'; $user['plan'] = 'monthly';
         if ($status === 'cancelled') $user['cancelled'] = $user['cancelled'] ?? date('c'); // paid period runs out, no renewal
         unset($user['pending_subscription']);
         // First activation → alert the owner: a new subscriber paid.
@@ -74,6 +79,7 @@ fg_json(200, [
     'premiumUntil' => $until,
     'aw' => $aw,
     'awUntil' => $user['aw_until'] ?? null,
+    'plan' => $trial ? 'trial' : ($premium ? ($user['plan'] ?? 'monthly') : null),
     'trial' => $trial,
     'trialUntil' => $user['trial_until'] ?? null,
     'source' => $trial ? 'trial' : ($user['source'] ?? null),
