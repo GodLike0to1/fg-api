@@ -1,7 +1,7 @@
 <?php
 // POST {email, code, token} → verifies the emailed code, returns {email, session}
 // plus premium status so the app can restore instantly on a new device.
-require __DIR__ . '/fg-config.php';
+require __DIR__ . '/entitlement-lib.php';
 fg_preflight();
 if ($_SERVER['REQUEST_METHOD'] !== 'POST') fg_json(405, ['error' => 'POST only']);
 $b = fg_body();
@@ -16,9 +16,7 @@ $want = hash_hmac('sha256', 'otp|' . $email . '|' . $code . '|' . $parts[0], $se
 if (!hash_equals($want, $parts[1])) fg_json(401, ['error' => 'Wrong code. Check the email and try again.']);
 $session = fg_make_session($email);
 $user = fg_load_user($email) ?: [];
-$until = $user['premium_until'] ?? null;
-fg_json(200, ['email' => $email, 'session' => $session,
-  'premium' => ($until && strtotime($until) > time()),
-  'premiumUntil' => $until,
-  'subscriptionId' => $user['subscription_id'] ?? null,
-  'name' => $user['name'] ?? null]);
+$e = fg_entitlement($email, $user);   // only paid time counts (no grace), same as entitlement.php
+fg_save_user($email, $user);
+unset($e['_newSub']);
+fg_json(200, array_merge($e, ['email' => $email, 'session' => $session, 'name' => $user['name'] ?? null]));

@@ -19,6 +19,6 @@ curl_setopt_array($ch, [CURLOPT_POST => true, CURLOPT_RETURNTRANSFER => true, CU
 $resp = json_decode((string)curl_exec($ch), true); $http = curl_getinfo($ch, CURLINFO_HTTP_CODE); curl_close($ch);
 if ($http < 200 || $http >= 300 || empty($resp['id'])) fg_json(502, ['error' => $resp['error']['description'] ?? 'Could not create order']);
 $user = fg_load_user($email) ?: [];
-$user['pending_order'] = $resp['id']; $user['pending_order_plan'] = $code;
+$user['pending_order'] = $resp['id']; $user['pending_order_plan'] = $code; $user['pending_order_at'] = date('c');
 fg_save_user($email, $user);
 fg_json(200, ['orderId' => $resp['id'], 'keyId' => $key, 'amount' => $P['amount'], 'name' => $P['name'], 'days' => $P['days']]);

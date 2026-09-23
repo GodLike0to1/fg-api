@@ -66,96 +66,83 @@ function fg_check_session($email, $token) {
     return hash_equals($want, $mac);
 }
 
-// Until when has this subscription actually been PAID? Razorpay moves current_start /
-// current_end to the next month on the due date, while the UPI AutoPay debit for that
-// month is still pending (Razorpay sends the pre-debit notice about a day earlier and
-// the bank debits on/after the due date). So a new cycle only counts once paid_count
-// covers it; until then the student keeps a short grace from the due date. This stops
-// a failed or cancelled renewal from granting a free month.
+// Until when has this subscription actually been PAID? (epoch; 0 = never paid)
+// Razorpay moves current_start/current_end to the next month around the due date,
+// while the UPI AutoPay debit for that month may still be pending or may fail. A
+// cycle therefore counts only once paid_count covers it. NO grace: an unpaid
+// renewal ends access exactly when the last paid month ends (= current_start).
 function fg_sub_paid_through($s) {
-    $cs = (int)($s['current_start'] ?? 0); $ce = (int)($s['current_end'] ?? 0);
-    if (!$cs || !$ce) return 0;
-    $start = (int)($s['start_at'] ?? 0); if (!$start || $start > $cs) $start = $cs;
     $paid = (int)($s['paid_count'] ?? 0);
-    $cycles = 1 + (int)round(($cs - $start) / (30.44 * 24 * 3600)); // billing cycles begun so far
-    if ($paid >= $cycles) return $ce;                               // the running cycle is paid
-    return $cs + 3 * 24 * 3600;                                      // renewal not debited yet: 3-day grace
+    if ($paid < 1) return 0;
+    $cs = (int)($s['current_start'] ?? 0); $ce = (int)($s['current_end'] ?? 0);
+    $start = (int)($s['start_at'] ?? 0);
+    if (!$cs || !$ce) {                                   // no cycle data: count paid months from the start
+        $base = $start ?: (int)($s['created_at'] ?? 0);
+        return $base ? $base + $paid * 30 * 86400 : 0;
+    }
+    if (!$start || $start > $cs) $start = $cs;
+    $cycles = 1 + (int)round(($cs - $start) / (30.44 * 86400)); // billing cycles begun so far
+    return $paid >= $cycles ? $ce : $cs;                   // running cycle paid -> its end; else the last paid end
 }
-// Resolve a student's paid access from Razorpay, robustly:
-//  - finds the subscription even if the local record lost its id (scans by notes.email)
-//  - grants for live subs, AND for cancelled/stopped subs whose paid period still runs
-//  - period end: current_end → ended_at+31d → current_start+31d → created_at+31d
-// Returns ['grant'=>bool,'end'=>epoch,'sub'=>array|null,'sub_id'=>string|null,'why'=>string].
+// Read every subscription of this student from Razorpay and work out what is paid.
+//  - finds subscriptions by the id on file AND by notes.email (a student can have several)
+//  - main tier (MCQ Premium): the latest paid-through date of any of them (₹999 includes MCQ)
+//  - Answer Writing tier: the latest paid-through date of the ₹999 ones
+//  - verified=false when Razorpay could not be read (callers then keep the last known dates)
+// Returns ['verified','grant','end','sub','sub_id','aw_grant','aw_end','aw_sub_id','why'].
 function fg_resolve_paid_access($email, $user) {
     $sec = fg_secrets();
     $key = $sec['razorpay_key_id'] ?? ''; $secret = $sec['razorpay_key_secret'] ?? '';
-    $out = ['grant' => false, 'end' => 0, 'sub' => null, 'sub_id' => null, 'why' => ''];
+    $out = ['verified' => false, 'grant' => false, 'end' => 0, 'sub' => null, 'sub_id' => null,
+            'aw_grant' => false, 'aw_end' => 0, 'aw_sub_id' => null, 'why' => ''];
     if (!$key || !$secret) { $out['why'] = 'no razorpay keys'; return $out; }
     $get = function ($path) use ($key, $secret) {
         $ch = curl_init('https://api.razorpay.com/v1' . $path);
         curl_setopt_array($ch, [CURLOPT_RETURNTRANSFER => true, CURLOPT_USERPWD => $key.':'.$secret, CURLOPT_TIMEOUT => 20]);
-        $r = json_decode((string)curl_exec($ch), true); curl_close($ch);
-        return is_array($r) ? $r : [];
+        $raw = curl_exec($ch); $code = (int)curl_getinfo($ch, CURLINFO_HTTP_CODE); curl_close($ch);
+        $r = json_decode((string)$raw, true);
+        return [$code, is_array($r) ? $r : []];
     };
-    // Gather every subscription for this student: the id on file PLUS all subs
-    // stamped with this email. A student can have several (e.g. a paid one that
-    // was cancelled, then a fresh unpaid one created by re-tapping Subscribe) —
-    // we must pick the one that actually carries paid access.
+    $email = strtolower(trim($email));
     $cands = [];
-    $subId = $user['subscription_id'] ?? ($user['pending_subscription'] ?? null);
-    if ($subId) { $d0 = $get('/subscriptions/' . rawurlencode($subId)); if (!empty($d0['id'])) $cands[$d0['id']] = $d0; }
-    $list = $get('/subscriptions?count=100');
-    foreach (($list['items'] ?? []) as $it) {
-        if (strtolower(trim($it['notes']['email'] ?? '')) === $email && !empty($it['id'])) $cands[$it['id']] = $it;
+    foreach (array_unique(array_filter([$user['subscription_id'] ?? null, $user['pending_subscription'] ?? null, $user['aw_subscription_id'] ?? null])) as $sid) {
+        [$c0, $d0] = $get('/subscriptions/' . rawurlencode($sid));
+        if ($c0 === 200 && !empty($d0['id'])) { $cands[$d0['id']] = $d0; $out['verified'] = true; }
     }
-    if (!$cands) { $out['why'] = 'no subscription found for email'; return $out; }
-    // Rank: live > paid (most recent) > unpaid (most recent).
-    $sub = []; $best = -1;
-    foreach ($cands as $it) {
-        $live = in_array($it['status'] ?? '', ['active', 'authenticated'], true) ? 2e12 : 0;
-        $paid = (int)($it['paid_count'] ?? 0) > 0 ? 1e12 : 0;
-        $score = $live + $paid + (int)($it['created_at'] ?? 0);
-        if ($score > $best) { $best = $score; $sub = $it; }
-    }
-    $out['sub'] = $sub; $out['sub_id'] = $sub['id'];
-    // Answer Writing (₹999) tier: any live/paid AW subscription grants aw_* too.
-    $awPlan = is_readable(__DIR__ . '/data/plan_aw_id.txt') ? trim(file_get_contents(__DIR__ . '/data/plan_aw_id.txt')) : '';
-    $out['aw_grant'] = false; $out['aw_end'] = 0; $out['aw_sub_id'] = null;
-    foreach ($cands as $it) {
-        $isAw = (($it['notes']['product'] ?? '') === 'flashgenius_aw') || ($awPlan && ($it['plan_id'] ?? '') === $awPlan);
-        if (!$isAw) continue;
-        $st = $it['status'] ?? ''; $pc = (int)($it['paid_count'] ?? 0); $d31 = 31 * 24 * 3600;
-        $e = fg_sub_paid_through($it);
-        $g = false;
-        if (in_array($st, ['active', 'authenticated'], true) && !$e && $pc < 1) { $e = time() + 2 * 24 * 3600; $g = true; } // mandate set, first debit in flight
-        elseif (in_array($st, ['active', 'authenticated'], true) && $e > time()) { $g = true; }
-        elseif ($pc >= 1) {
-            if (!$e && !empty($it['ended_at']))      $e = (int)$it['ended_at'] + $d31;
-            if (!$e && !empty($it['current_start'])) $e = (int)$it['current_start'] + $d31;
-            if (!$e && !empty($it['created_at']))    $e = (int)$it['created_at'] + $d31;
-            $g = $e > time();
+    for ($skip = 0; $skip < 500; $skip += 100) {            // newest first, 100 per page
+        [$c1, $list] = $get('/subscriptions?count=100&skip=' . $skip);
+        if ($c1 !== 200 || !isset($list['items'])) { if ($skip === 0) $out['verified'] = false; break; }
+        $out['verified'] = true;
+        foreach ($list['items'] as $it) {
+            if (strtolower(trim($it['notes']['email'] ?? '')) === $email && !empty($it['id'])) $cands[$it['id']] = $it;
         }
-        if ($g && $e > $out['aw_end']) { $out['aw_grant'] = true; $out['aw_end'] = $e; $out['aw_sub_id'] = $it['id']; }
+        if (count($list['items']) < 100) break;
     }
-    $status = $sub['status'] ?? '';
-    $paid = (int)($sub['paid_count'] ?? 0);
-    $d = 31 * 24 * 3600;
-    $end = fg_sub_paid_through($sub);
-    if (in_array($status, ['active', 'authenticated'], true) && !$end && $paid < 1) {
-        $end = time() + 2 * 24 * 3600;                    // mandate set, first debit in flight: re-checked soon
-        $out['grant'] = true; $out['why'] = 'live subscription, first debit pending';
-    } elseif (in_array($status, ['active', 'authenticated'], true) && $end > time()) {
-        $out['grant'] = true; $out['why'] = 'live subscription, paid through ' . date('Y-m-d', $end);
-    } elseif ($paid >= 1) {
-        if (!$end && !empty($sub['ended_at']))      $end = (int)$sub['ended_at'] + $d;
-        if (!$end && !empty($sub['current_start'])) $end = (int)$sub['current_start'] + $d;
-        if (!$end && !empty($sub['created_at']))    $end = (int)$sub['created_at'] + $d;
-        if ($end > time()) { $out['grant'] = true; $out['why'] = "paid period still running (status $status)"; }
-        else $out['why'] = "paid period over (status $status)";
-    } else {
-        $out['why'] = "not paid (status $status, paid_count $paid)";
+    if (!$out['verified']) { $out['why'] = 'razorpay unreachable'; return $out; }
+    if (!$cands) { $out['why'] = 'no subscription for this email'; return $out; }
+    $awPlan = is_readable(__DIR__ . '/data/plan_aw_id.txt') ? trim(file_get_contents(__DIR__ . '/data/plan_aw_id.txt')) : '';
+    // Best subscription: latest paid-through date, then a live one, then the newest.
+    $rows = array_values($cands);
+    usort($rows, function ($a, $b) {
+        $ta = fg_sub_paid_through($a); $tb = fg_sub_paid_through($b);
+        if ($ta !== $tb) return $tb <=> $ta;
+        $la = in_array($a['status'] ?? '', ['active', 'authenticated'], true) ? 1 : 0;
+        $lb = in_array($b['status'] ?? '', ['active', 'authenticated'], true) ? 1 : 0;
+        if ($la !== $lb) return $lb <=> $la;
+        return (int)($b['created_at'] ?? 0) <=> (int)($a['created_at'] ?? 0);
+    });
+    $bestSub = $rows[0];
+    foreach ($rows as $it) {
+        $isAw = (($it['notes']['product'] ?? '') === 'flashgenius_aw') || ($awPlan && ($it['plan_id'] ?? '') === $awPlan);
+        $t = fg_sub_paid_through($it);
+        if ($isAw && $t > $out['aw_end']) { $out['aw_end'] = $t; $out['aw_sub_id'] = $it['id']; }
     }
-    $out['end'] = $end;
+    $end = fg_sub_paid_through($bestSub);
+    $out['sub'] = $bestSub; $out['sub_id'] = $bestSub['id'] ?? null; $out['end'] = $end;
+    $out['grant'] = $end > time();
+    $out['aw_grant'] = $out['aw_end'] > time();
+    $st = $bestSub['status'] ?? '';
+    $out['why'] = $end ? ('paid through ' . date('Y-m-d H:i', $end) . " (status $st)") : "never paid (status $st)";
     return $out;
 }
 

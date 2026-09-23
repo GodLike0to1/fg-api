@@ -18,12 +18,12 @@ if (($payment['status'] ?? '') === 'authorized') { // auto-capture is on for thi
 }
 $user = fg_load_user($email) ?: [];
 $new = fg_onetime_apply($user, $payment);
-if (!$new && empty($user['premium_until'])) fg_json(402, ['error' => 'Payment not captured yet. Open the app in a minute; it will unlock automatically.']);
+if (!$new && (empty($user['pass_until']) || strtotime($user['pass_until']) <= time())) fg_json(402, ['error' => 'Payment not captured yet. Open the app in a minute; it will unlock automatically.']);
 fg_save_user($email, $user);
 if ($new) {
     $h = "MIME-Version: 1.0\r\nContent-Type: text/html; charset=UTF-8\r\nFrom: FlashGenius <no-reply@netmock.com>\r\n";
     @mail('netmockprep@gmail.com', 'New FlashGenius ' . $user['plan'] . ' pass: ' . $email,
         '<div style="font-family:sans-serif"><h3>One-time Premium pass paid</h3><p><b>Email:</b> ' . htmlspecialchars($email) . '<br><b>Plan:</b> ' . htmlspecialchars($user['plan'])
-        . '<br><b>Amount:</b> ₹' . number_format(((int)$payment['amount']) / 100) . '<br><b>Payment:</b> ' . htmlspecialchars($pid) . '<br><b>Valid till:</b> ' . date('d M Y', strtotime($user['premium_until'])) . '</p></div>', $h);
+        . '<br><b>Amount:</b> ₹' . number_format(((int)$payment['amount']) / 100) . '<br><b>Payment:</b> ' . htmlspecialchars($pid) . '<br><b>Valid till:</b> ' . date('d M Y', strtotime($user['pass_until'])) . '</p></div>', $h);
 }
-fg_json(200, ['ok' => true, 'premiumUntil' => $user['premium_until'], 'plan' => $user['plan'] ?? null]);
+fg_json(200, ['ok' => true, 'premiumUntil' => $user['pass_until'], 'plan' => $user['pass_plan'] ?? ($user['plan'] ?? null)]);

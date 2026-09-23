@@ -26,30 +26,14 @@ function aw_save($email, $date, $meta) {
     file_put_contents(aw_meta_path($email, $date), json_encode($meta, JSON_UNESCAPED_UNICODE), LOCK_EX);
 }
 
-// Is this student entitled to Answer Writing right now? Uses the cached
-// aw_until on the user record; re-resolves from Razorpay when missing/expired
-// (at most once every 30 minutes so a launch does not hammer Razorpay).
+// Is this student entitled to Answer Writing right now? Only for the time the
+// ₹999 plan has actually been paid (entitlement-lib.php): no grace days.
 function aw_entitled($email, &$user) {
+    require_once __DIR__ . '/entitlement-lib.php';
     $user = $user ?: (fg_load_user($email) ?: []);
-    $until = $user['aw_until'] ?? null;
-    if ($until && strtotime($until) > time()) return true;
-    $checked = isset($user['aw_checked']) ? strtotime($user['aw_checked']) : 0;
-    if (time() - $checked < 1800) return false;
-    $r = fg_resolve_paid_access($email, $user);
-    $user['aw_checked'] = date('c');
-    if (!empty($r['aw_grant'])) {
-        $user['aw_until'] = date('c', (int)$r['aw_end'] + 24 * 3600);
-        $user['aw_subscription_id'] = $r['aw_sub_id'] ?? null;
-        // ₹999 includes MCQ premium
-        if (empty($user['premium_until']) || strtotime($user['premium_until']) < (int)$r['aw_end']) {
-            $user['premium_until'] = $user['aw_until'];
-            $user['source'] = 'razorpay_web';
-        }
-        fg_save_user($email, $user);
-        return true;
-    }
+    $e = fg_entitlement($email, $user);
     fg_save_user($email, $user);
-    return false;
+    return !empty($e['aw']);
 }
 
 // Public view of one submission (result hidden until ready_at).

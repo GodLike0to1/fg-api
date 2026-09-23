@@ -4,8 +4,8 @@
  * Paid through a Razorpay ORDER (premium.html?plan=q|y), verified by
  * verify-payment.php (signature) and, as a safety net, re-discovered by
  * entitlement.php from the payments list (notes.email + notes.product).
- * Fields on the fg user record: premium_until, plan ('quarter'|'annual'),
- * onetime_payments: [payment_id, ...]
+ * Fields on the fg user record: pass_until, pass_plan ('quarter'|'annual'),
+ * onetime_payments: [payment_id, ...]; premium_until is recomputed by entitlement-lib.php
  */
 require_once __DIR__ . '/fg-config.php';
 const FG_ONETIME = [
@@ -30,15 +30,19 @@ function fg_onetime_apply(&$user, $payment) {
     if (!$code || ($payment['status'] ?? '') !== 'captured') return false;
     if ((int)($payment['amount'] ?? 0) < FG_ONETIME[$code]['amount']) return false;
     $days = FG_ONETIME[$code]['days'];
-    $start = max(time(), !empty($user['premium_until']) ? (int)strtotime($user['premium_until']) : 0);
-    // A pass bought while an older window still runs starts when that window ends.
-    $paidAt = (int)($payment['created_at'] ?? time());
-    if ($start === time() && $paidAt < time()) $start = $paidAt; // back-date if discovered late
-    $user['premium_until'] = date('c', $start + $days * 86400);
+    $now = time();
+    $ts = function ($k) use (&$user) { return !empty($user[$k]) ? (int)strtotime((string)$user[$k]) : 0; };
+    // A pass bought while a PAID window still runs starts when that window ends.
+    $start = max($now, $ts('pass_until'), $ts('sub_until'), $ts('aw_until'));
+    $paidAt = (int)($payment['created_at'] ?? $now);
+    if ($start === $now && $paidAt < $now) $start = $paidAt;   // discovered late: counts from the payment
+    $user['pass_until'] = date('c', $start + $days * 86400);
+    $user['pass_plan'] = FG_ONETIME[$code]['plan'];
     $user['plan'] = FG_ONETIME[$code]['plan'];
+    $user['premium_until'] = date('c', max($start + $days * 86400, $ts('sub_until'), $ts('aw_until')));
     $user['source'] = 'razorpay_onetime';
     $done[] = $pid; $user['onetime_payments'] = array_slice($done, -20);
-    unset($user['pending_order']);
+    unset($user['pending_order'], $user['pending_order_at']);
     return true;
 }
 // Safety net: find captured one-time payments for this email that were never applied.
