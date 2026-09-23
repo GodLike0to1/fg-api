@@ -26,14 +26,19 @@ function lb_save_user($email, $u) {
     file_put_contents(lb_user_path($email), json_encode($u, JSON_UNESCAPED_UNICODE), LOCK_EX);
 }
 // "Rahul Mehta" -> "Rahul M."; email-only -> "Rahul"; keeps Devanagari names intact.
+// Letters only (any script); digits and symbols from email ids are dropped, never "Name .".
 function lb_display_name($name, $email) {
-    $name = trim(preg_replace('/\s+/u', ' ', (string)$name));
-    if ($name === '') $name = ucfirst(preg_replace('/[^a-z]/i', ' ', explode('@', $email)[0]));
+    $clean = function ($t) { return trim(preg_replace('/\s+/u', ' ', preg_replace('/[^\p{L}\p{M}\s]+/u', ' ', (string)$t))); };
+    $name = $clean(strpos((string)$name, '@') !== false ? '' : $name);
+    if ($name === '') $name = $clean(preg_replace('/[^a-z]+/i', ' ', explode('@', (string)$email)[0]));
+    if ($name === '') return 'Student';
     $parts = preg_split('/\s+/u', $name);
-    $first = mb_substr($parts[0], 0, 18);
-    if (count($parts) > 1) { $last = mb_substr(end($parts), 0, 1); return $first . ' ' . mb_strtoupper($last) . '.'; }
+    $first = mb_convert_case(mb_substr($parts[0], 0, 18), MB_CASE_TITLE, 'UTF-8');
+    if (count($parts) > 1) { $last = mb_substr(end($parts), 0, 1); if ($last !== '') return $first . ' ' . mb_strtoupper($last) . '.'; }
     return $first;
 }
+// Names stored by the old rule ("Kiranluthra .") read cleanly without touching the files.
+function lb_clean_stored_name($n) { $n = trim(preg_replace('/\s+\.$/u', '', (string)$n)); return $n !== '' ? $n : 'Student'; }
 function lb_is_mentor($email) { return in_array(strtolower(trim($email)), array_map('strtolower', lb_cfg()['mentor_emails']), true); }
 function lb_month_key($ts) { return (new DateTime('@' . $ts))->setTimezone(new DateTimeZone('Asia/Kolkata'))->format('Y-m'); }
 
@@ -74,14 +79,15 @@ function lb_board($force = false) {
         $testsMonth += (int)($u['months'][$month]['tests'] ?? 0);
         $answered = (int)($u['correct'] ?? 0) + (int)($u['wrong'] ?? 0);
         $row = [
-            'uid' => lb_uid($u['email']), 'name' => $u['name'] ?? 'Student',
+            'uid' => lb_uid($u['email']), 'name' => lb_clean_stored_name($u['name'] ?? ''),
             'points' => round((float)($u['points'] ?? 0), 2), 'tests' => (int)($u['tests'] ?? 0),
             'accuracy' => $answered ? (int)round(100 * (int)$u['correct'] / $answered) : 0,
             'avgTime' => (int)($u['tests'] ?? 0) ? (int)round((int)($u['seconds'] ?? 0) / (int)$u['tests']) : 0,
             'monthPoints' => round((float)($u['months'][$month]['points'] ?? 0), 2),
         ];
         if (lb_is_mentor($u['email'])) { $row['mentor'] = true; $mentors[] = $row; continue; }
-        if (!empty($u['hide']) || (int)($u['tests'] ?? 0) < 1) continue;
+        // Ranked once the student has answered anything: a full set, or the free 1-question previews.
+        if (!empty($u['hide']) || ((int)($u['tests'] ?? 0) < 1 && $answered < 1)) continue;
         $rows[] = $row;
     }
     usort($rows, function ($a, $b) {

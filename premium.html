@@ -19,6 +19,7 @@
   .note{font-size:11.5px;color:#888;margin-top:14px}
   .err{color:#b91c1c;font-size:13px;min-height:18px;margin-top:8px}
   .ok{color:#047857;font-weight:700;font-size:15px;margin-top:12px}
+.tip{margin-top:10px;font-size:12.5px;line-height:1.45;color:#5b21b6;background:#f5f3ff;border:1px solid #ddd6fe;border-radius:10px;padding:9px 11px}
 </style>
 </head>
 <body>
@@ -34,6 +35,7 @@
   </ul>
   <input id="email" type="email" placeholder="Your Gmail (same as in the app)" autocomplete="email">
   <button id="pay" onclick="startPay()">Subscribe — ₹199/month</button>
+  <div class="tip" id="tip">After you pick GPay, PhonePe, Paytm or BHIM, <b>approve the AutoPay request inside that app within 5 minutes</b> (it asks for your UPI PIN once). If the request does not appear, come back and choose another UPI app.</div>
   <div class="err" id="err"></div>
   <div class="ok" id="ok" style="display:none">✅ Payment set up! Open FlashGenius and sign in with this Gmail — Premium will be active.</div>
   <div class="note">Auto-debits ₹199 monthly via UPI AutoPay. Cancel anytime — no further charges. Support: netmockias@gmail.com · <a href="https://netmock.com/cancellation-and-refund-policy/">Refund policy</a></div>
@@ -63,6 +65,7 @@ window.addEventListener('DOMContentLoaded', () => {
       document.querySelector('.price').textContent = '₹' + O.price.toLocaleString('en-IN');
       document.querySelector('.per').textContent = O.label + ' · ' + O.per;
       document.getElementById('pay').textContent = 'Pay ₹' + O.price.toLocaleString('en-IN') + ' once';
+      document.getElementById('tip').style.display = 'none';
       document.querySelector('.note').innerHTML = 'One-time payment of ₹' + O.price.toLocaleString('en-IN') + ' for ' + O.label + ' of Premium. Nothing is auto-debited and there is nothing to cancel. Support: netmockias@gmail.com · <a href="https://netmock.com/cancellation-and-refund-policy/">Refund policy</a>';
     }
     const em = new URLSearchParams(location.search).get('email');

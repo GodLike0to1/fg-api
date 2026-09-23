@@ -31,10 +31,14 @@ if (isset($info['exp']) && (int)$info['exp'] < time()) fg_json(401, ['error' => 
 $email = strtolower($info['email']);
 $user = fg_load_user($email) ?: [];
 if (empty($user['created'])) $user['created'] = date('c');
+// Name for the All-India board: the Google profile name, unless the student already chose one.
+$gname = trim((string)($info['name'] ?? trim(($info['given_name'] ?? '') . ' ' . ($info['family_name'] ?? ''))));
+if (empty($user['name']) && $gname !== '') $user['name'] = mb_substr($gname, 0, 40);
 fg_save_user($email, $user);
 
 fg_json(200, [
     'email' => $email,
     'session' => fg_make_session($email),
     'premiumUntil' => $user['premium_until'] ?? null,
+    'name' => $user['name'] ?? null,
 ]);

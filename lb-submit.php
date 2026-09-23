@@ -58,6 +58,7 @@ if ($subject !== '' && !$tooFast) {                  // weak-area stats (preview
     if (isset($u['subjectsMonth']) && count($u['subjectsMonth']) > 4) { ksort($u['subjectsMonth']); $u['subjectsMonth'] = array_slice($u['subjectsMonth'], -4, null, true); }
 }
 if (!empty($b['name'])) $u['name'] = lb_display_name($b['name'], $email);
+elseif (empty($u['name']) || preg_match('/\s\.$/u', (string)$u['name'])) { $f = fg_load_user($email); if (!empty($f['name'])) $u['name'] = lb_display_name($f['name'], $email); }
 if (empty($u['name'])) $u['name'] = lb_display_name('', $email);
 if ($attempt['ranked']) {
     $u['points'] = round($u['points'] + $points, 2); if (!$preview) $u['tests']++;

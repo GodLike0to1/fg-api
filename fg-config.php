@@ -66,6 +66,21 @@ function fg_check_session($email, $token) {
     return hash_equals($want, $mac);
 }
 
+// Until when has this subscription actually been PAID? Razorpay moves current_start /
+// current_end to the next month on the due date, while the UPI AutoPay debit for that
+// month is still pending (Razorpay sends the pre-debit notice about a day earlier and
+// the bank debits on/after the due date). So a new cycle only counts once paid_count
+// covers it; until then the student keeps a short grace from the due date. This stops
+// a failed or cancelled renewal from granting a free month.
+function fg_sub_paid_through($s) {
+    $cs = (int)($s['current_start'] ?? 0); $ce = (int)($s['current_end'] ?? 0);
+    if (!$cs || !$ce) return 0;
+    $start = (int)($s['start_at'] ?? 0); if (!$start || $start > $cs) $start = $cs;
+    $paid = (int)($s['paid_count'] ?? 0);
+    $cycles = 1 + (int)round(($cs - $start) / (30.44 * 24 * 3600)); // billing cycles begun so far
+    if ($paid >= $cycles) return $ce;                               // the running cycle is paid
+    return $cs + 3 * 24 * 3600;                                      // renewal not debited yet: 3-day grace
+}
 // Resolve a student's paid access from Razorpay, robustly:
 //  - finds the subscription even if the local record lost its id (scans by notes.email)
 //  - grants for live subs, AND for cancelled/stopped subs whose paid period still runs
@@ -110,9 +125,10 @@ function fg_resolve_paid_access($email, $user) {
         $isAw = (($it['notes']['product'] ?? '') === 'flashgenius_aw') || ($awPlan && ($it['plan_id'] ?? '') === $awPlan);
         if (!$isAw) continue;
         $st = $it['status'] ?? ''; $pc = (int)($it['paid_count'] ?? 0); $d31 = 31 * 24 * 3600;
-        $e = !empty($it['current_end']) ? (int)$it['current_end'] : 0;
+        $e = fg_sub_paid_through($it);
         $g = false;
-        if (in_array($st, ['active', 'authenticated'], true)) { if (!$e || $e < time()) $e = time() + $d31; $g = true; }
+        if (in_array($st, ['active', 'authenticated'], true) && !$e && $pc < 1) { $e = time() + 2 * 24 * 3600; $g = true; } // mandate set, first debit in flight
+        elseif (in_array($st, ['active', 'authenticated'], true) && $e > time()) { $g = true; }
         elseif ($pc >= 1) {
             if (!$e && !empty($it['ended_at']))      $e = (int)$it['ended_at'] + $d31;
             if (!$e && !empty($it['current_start'])) $e = (int)$it['current_start'] + $d31;
@@ -124,10 +140,12 @@ function fg_resolve_paid_access($email, $user) {
     $status = $sub['status'] ?? '';
     $paid = (int)($sub['paid_count'] ?? 0);
     $d = 31 * 24 * 3600;
-    $end = !empty($sub['current_end']) ? (int)$sub['current_end'] : 0;
-    if (in_array($status, ['active', 'authenticated'], true)) {
-        if (!$end || $end < time()) $end = time() + $d;
-        $out['grant'] = true; $out['why'] = 'live subscription';
+    $end = fg_sub_paid_through($sub);
+    if (in_array($status, ['active', 'authenticated'], true) && !$end && $paid < 1) {
+        $end = time() + 2 * 24 * 3600;                    // mandate set, first debit in flight: re-checked soon
+        $out['grant'] = true; $out['why'] = 'live subscription, first debit pending';
+    } elseif (in_array($status, ['active', 'authenticated'], true) && $end > time()) {
+        $out['grant'] = true; $out['why'] = 'live subscription, paid through ' . date('Y-m-d', $end);
     } elseif ($paid >= 1) {
         if (!$end && !empty($sub['ended_at']))      $end = (int)$sub['ended_at'] + $d;
         if (!$end && !empty($sub['current_start'])) $end = (int)$sub['current_start'] + $d;

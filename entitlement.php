@@ -83,4 +83,5 @@ fg_json(200, [
     'trial' => $trial,
     'trialUntil' => $user['trial_until'] ?? null,
     'source' => $trial ? 'trial' : ($user['source'] ?? null),
+    'name' => $user['name'] ?? null,
 ]);

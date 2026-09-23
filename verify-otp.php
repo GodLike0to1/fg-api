@@ -20,4 +20,5 @@ $until = $user['premium_until'] ?? null;
 fg_json(200, ['email' => $email, 'session' => $session,
   'premium' => ($until && strtotime($until) > time()),
   'premiumUntil' => $until,
-  'subscriptionId' => $user['subscription_id'] ?? null]);
+  'subscriptionId' => $user['subscription_id'] ?? null,
+  'name' => $user['name'] ?? null]);

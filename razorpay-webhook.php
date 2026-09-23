@@ -23,10 +23,12 @@ if (!$email) { http_response_code(200); echo 'no email, ignored'; exit; }
 $user = fg_load_user($email) ?: [];
 
 if ($event === 'subscription.charged' || $event === 'subscription.activated') {
-    $base = time();
+    // Paid through = end of the cycle this charge paid for (+1 day grace). Setting a date
+    // (not adding 31 days) keeps repeated or late webhooks from stacking free months.
     $cur = isset($user['premium_until']) ? strtotime($user['premium_until']) : 0;
-    if ($cur > $base) $base = $cur;                 // extend, don't overwrite
-    $user['premium_until'] = date('c', $base + 31 * 24 * 3600);
+    $through = fg_sub_paid_through($sub);
+    if (!$through) $through = time() + 31 * 24 * 3600;
+    $user['premium_until'] = date('c', max($cur, $through + 24 * 3600));
     $user['source'] = 'razorpay_web';
     $user['subscription_id'] = $sub['id'] ?? ($user['subscription_id'] ?? null);
     unset($user['pending_subscription']);
