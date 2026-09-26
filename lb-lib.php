@@ -7,6 +7,7 @@
  *   FG_DATA_DIR/lb/board.json                cached board (60 s)
  */
 require_once __DIR__ . '/fg-config.php';
+require_once __DIR__ . '/review-lib.php';
 function lb_cfg() { static $c = null; if ($c === null) $c = include __DIR__ . '/lb-config.php'; return $c; }
 function lb_dir() { return FG_DATA_DIR . '/lb'; }
 function lb_uid($email) { return sha1(strtolower(trim($email))); }
@@ -104,6 +105,28 @@ function lb_credit_unranked_once() {
     @file_put_contents($mark, date('c') . " credited $n\n", FILE_APPEND | LOCK_EX);
     return $n;
 }
+// One student's board row from the lb user record.
+function lb_row($u, $month) {
+    $answered = (int)($u['correct'] ?? 0) + (int)($u['wrong'] ?? 0);
+    return [
+        'uid' => lb_uid($u['email']), 'name' => lb_clean_stored_name($u['name'] ?? ''),
+        'points' => round((float)($u['points'] ?? 0), 2), 'tests' => (int)($u['tests'] ?? 0),
+        'accuracy' => $answered ? (int)round(100 * (int)$u['correct'] / $answered) : 0,
+        'avgTime' => (int)($u['tests'] ?? 0) ? (int)round((int)($u['seconds'] ?? 0) / (int)$u['tests']) : 0,
+        'monthPoints' => round((float)($u['months'][$month]['points'] ?? 0), 2),
+    ];
+}
+// Ranked once the student has answered anything: a full set, or the free 1-question previews.
+function lb_rankable($u) {
+    return empty($u['hide']) && ((int)($u['tests'] ?? 0) >= 1 || (int)($u['correct'] ?? 0) + (int)($u['wrong'] ?? 0) >= 1);
+}
+// Board order: points, then accuracy, then the faster average time.
+function lb_cmp($a, $b) {
+    if ($a['points'] != $b['points']) return $b['points'] <=> $a['points'];
+    if ($a['accuracy'] != $b['accuracy']) return $b['accuracy'] <=> $a['accuracy'];
+    return $a['avgTime'] <=> $b['avgTime'];
+}
+function lb_rank_rows(&$rows) { usort($rows, 'lb_cmp'); foreach ($rows as $i => &$r) $r['rank'] = $i + 1; unset($r); }
 // Build (or read the 60 s cache of) the All-India board.
 function lb_board($force = false) {
     $cache = lb_dir() . '/board.json';
@@ -113,27 +136,15 @@ function lb_board($force = false) {
     foreach (glob(lb_dir() . '/users/*.json') ?: [] as $p) {
         $u = json_decode(file_get_contents($p), true);
         if (!is_array($u) || empty($u['email'])) continue;
+        if (fg_is_review($u['email'])) continue;           // Google Play review account: never on the board or in its counts
         $testsAll += (int)($u['tests'] ?? 0);
         $testsMonth += (int)($u['months'][$month]['tests'] ?? 0);
-        $answered = (int)($u['correct'] ?? 0) + (int)($u['wrong'] ?? 0);
-        $row = [
-            'uid' => lb_uid($u['email']), 'name' => lb_clean_stored_name($u['name'] ?? ''),
-            'points' => round((float)($u['points'] ?? 0), 2), 'tests' => (int)($u['tests'] ?? 0),
-            'accuracy' => $answered ? (int)round(100 * (int)$u['correct'] / $answered) : 0,
-            'avgTime' => (int)($u['tests'] ?? 0) ? (int)round((int)($u['seconds'] ?? 0) / (int)$u['tests']) : 0,
-            'monthPoints' => round((float)($u['months'][$month]['points'] ?? 0), 2),
-        ];
+        $row = lb_row($u, $month);
         if (lb_is_mentor($u['email'])) { $row['mentor'] = true; $mentors[] = $row; continue; }
-        // Ranked once the student has answered anything: a full set, or the free 1-question previews.
-        if (!empty($u['hide']) || ((int)($u['tests'] ?? 0) < 1 && $answered < 1)) continue;
+        if (!lb_rankable($u)) continue;
         $rows[] = $row;
     }
-    usort($rows, function ($a, $b) {
-        if ($a['points'] != $b['points']) return $b['points'] <=> $a['points'];
-        if ($a['accuracy'] != $b['accuracy']) return $b['accuracy'] <=> $a['accuracy'];
-        return $a['avgTime'] <=> $b['avgTime'];
-    });
-    foreach ($rows as $i => &$r) $r['rank'] = $i + 1; unset($r);
+    lb_rank_rows($rows);
     $board = ['builtAt' => date('c'), 'students' => count($rows), 'testsAll' => $testsAll, 'testsMonth' => $testsMonth,
               'rows' => $rows, 'mentors' => $mentors];
     if (!is_dir(lb_dir())) mkdir(lb_dir(), 0755, true);
@@ -174,8 +185,18 @@ function lb_mine($email) { // caller-only extras shipped next to 'me'
     $prem = lb_is_premium($email);
     return ['streak' => lb_streak_view($u, $prem), 'subjects' => lb_subjects_view($u), 'progress' => lb_progress_view($u), 'premium' => $prem];
 }
+// The review account sees its own row, ranked among everyone; nobody else ever does.
+function lb_with_review_row($board, $email) {
+    $u = lb_load_user($email);
+    if (!$u || empty($u['email']) || !lb_rankable($u)) return $board;
+    $rows = $board['rows']; $rows[] = lb_row($u, lb_month_key(time()));
+    lb_rank_rows($rows);
+    $board['rows'] = $rows; $board['students'] = count($rows);
+    return $board;
+}
 function lb_public($board, $email) {
     $cfg = lb_cfg();
+    if ($email && fg_is_review($email)) $board = lb_with_review_row($board, $email);
     $rows = array_slice($board['rows'], 0, (int)$cfg['top_n']);
     $strip = function ($r) { unset($r['uid']); return $r; };
     return [
@@ -186,7 +207,7 @@ function lb_public($board, $email) {
         'mine' => $email ? lb_mine($email) : null,
         'toppers' => array_map($strip, array_slice($board['rows'], 0, 10)),
         'builtAt' => $board['builtAt'],
-        'rules' => ['minSecondsPerQuestion' => (int)$cfg['min_seconds_per_question'], 'api' => '2026-09-26'],
+        'rules' => ['minSecondsPerQuestion' => (int)$cfg['min_seconds_per_question'], 'api' => '2026-09-26b'],
     ];
 }
 
@@ -228,6 +249,7 @@ function lb_streak_view($u, $premium) {
 }
 // Is this student premium right now (paid, Answer Writing or referral trial)?
 function lb_is_premium($email) {
+    if (fg_is_review($email)) return true;
     $f = fg_load_user($email); if (!$f) return false;
     foreach (['premium_until', 'aw_until', 'trial_until'] as $k) if (!empty($f[$k]) && strtotime($f[$k]) > time()) return true;
     return false;

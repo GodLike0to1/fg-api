@@ -9,6 +9,7 @@
  *  - One-time passes (₹799 / ₹1,999): the fixed date that was bought.
  *  - ₹999 Answer Writing: same rule as the monthly subscription (includes MCQ Premium).
  *  - Referral trial: its own trial_until (a reward, not a payment).
+ *  - Google Play review account (review-lib.php): Premium and Answer Writing, nothing paid.
  * Paid-through dates cached on the student record are trusted for at most
  * 10 minutes; once a cached date has passed it is always re-checked with Razorpay.
  *
@@ -19,10 +20,12 @@
 require_once __DIR__ . '/fg-config.php';
 require_once __DIR__ . '/onetime-lib.php';
 require_once __DIR__ . '/ref-lib.php';
+require_once __DIR__ . '/review-lib.php';
 
 function fg_entitlement($email, &$user) {
     $now = time();
     $email = strtolower(trim($email));
+    if (fg_is_review($email)) return fg_review_entitlement();
     $ts = function ($k) use (&$user) { return !empty($user[$k]) ? (int)strtotime((string)$user[$k]) : 0; };
 
     // Older records kept a one-time pass only in premium_until.
