@@ -67,9 +67,47 @@ function lb_fetch_deck($ck, $v) {
     if (is_readable($f)) { $j = json_decode(file_get_contents($f), true); if (is_array($j)) return $j; }
     return null;
 }
+// One-time (26 Sep 2026): first attempts that the old 4-seconds-a-question rule left
+// unranked are credited now, exactly as lb-submit would have, so everyone who took a
+// test is on the board. A marker file makes sure it never runs twice.
+function lb_credit_unranked_once() {
+    $mark = lb_dir() . '/.credited-fast-2026-09-26';
+    if (!is_dir(lb_dir()) || file_exists($mark)) return 0;
+    $fh = @fopen($mark, 'x');                          // atomic: only one request ever gets past here
+    if (!$fh) return 0;
+    fwrite($fh, date('c') . "\n"); fclose($fh);
+    $n = 0;
+    foreach (glob(lb_dir() . '/attempts/*', GLOB_ONLYDIR) ?: [] as $adir) {
+        $upath = lb_dir() . '/users/' . basename($adir) . '.json';
+        if (!is_readable($upath)) continue;
+        $u = json_decode(file_get_contents($upath), true);
+        if (!is_array($u) || empty($u['email'])) continue;
+        $changed = false;
+        foreach (glob($adir . '/*.json') ?: [] as $af) {
+            $a = json_decode(file_get_contents($af), true);
+            if (!is_array($a) || !empty($a['ranked']) || !empty($a['credited'])) continue;
+            $preview = substr($af, -7) === '-p.json';
+            $u['points'] = round((float)($u['points'] ?? 0) + (float)($a['points'] ?? 0), 2);
+            foreach (['correct', 'wrong', 'skipped'] as $k) $u[$k] = (int)($u[$k] ?? 0) + (int)($a[$k] ?? 0);
+            if (!$preview) { $u['tests'] = (int)($u['tests'] ?? 0) + 1; $u['seconds'] = (int)($u['seconds'] ?? 0) + (int)($a['seconds'] ?? 0); }
+            $at = strtotime((string)($a['at'] ?? '')) ?: time();
+            $mk = lb_month_key($at);
+            $m = $u['months'][$mk] ?? ['points' => 0, 'tests' => 0];
+            $m['points'] = round((float)$m['points'] + (float)($a['points'] ?? 0), 2); if (!$preview) $m['tests'] = (int)$m['tests'] + 1;
+            $u['months'][$mk] = $m;
+            $a['ranked'] = true; $a['credited'] = date('c');
+            file_put_contents($af, json_encode($a), LOCK_EX);
+            $changed = true; $n++;
+        }
+        if ($changed) { $u['updated'] = date('c'); file_put_contents($upath, json_encode($u, JSON_UNESCAPED_UNICODE), LOCK_EX); }
+    }
+    @file_put_contents($mark, date('c') . " credited $n\n", FILE_APPEND | LOCK_EX);
+    return $n;
+}
 // Build (or read the 60 s cache of) the All-India board.
 function lb_board($force = false) {
     $cache = lb_dir() . '/board.json';
+    if (lb_credit_unranked_once() > 0) $force = true;
     if (!$force && is_readable($cache) && (time() - filemtime($cache)) < 60) { $j = json_decode(file_get_contents($cache), true); if (is_array($j)) return $j; }
     $rows = []; $mentors = []; $testsAll = 0; $testsMonth = 0; $month = lb_month_key(time());
     foreach (glob(lb_dir() . '/users/*.json') ?: [] as $p) {
@@ -148,6 +186,7 @@ function lb_public($board, $email) {
         'mine' => $email ? lb_mine($email) : null,
         'toppers' => array_map($strip, array_slice($board['rows'], 0, 10)),
         'builtAt' => $board['builtAt'],
+        'rules' => ['minSecondsPerQuestion' => (int)$cfg['min_seconds_per_question'], 'api' => '2026-09-26'],
     ];
 }
 
