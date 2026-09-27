@@ -207,7 +207,7 @@ function lb_public($board, $email) {
         'mine' => $email ? lb_mine($email) : null,
         'toppers' => array_map($strip, array_slice($board['rows'], 0, 10)),
         'builtAt' => $board['builtAt'],
-        'rules' => ['minSecondsPerQuestion' => (int)$cfg['min_seconds_per_question'], 'api' => '2026-09-26b'],
+        'rules' => ['minSecondsPerQuestion' => (int)$cfg['min_seconds_per_question'], 'api' => '2026-09-28'],
     ];
 }
 
