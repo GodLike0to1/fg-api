@@ -19,9 +19,9 @@
 require_once __DIR__ . '/fg-config.php';
 
 const FG_REVIEW_EMAIL = 'playreview@netmock.com';
-const FG_REVIEW_OWNER = 'netmockias@gmail.com';
+const FG_REVIEW_OWNER = 'netmockprep@gmail.com, netmockias@gmail.com';   // both owner inboxes
 const FG_REVIEW_MAX_FAILS = 20;
-const FG_REVIEW_GEN = 1;                                   // raise to make (and email) a new code
+const FG_REVIEW_GEN = 2;                                   // raise to make (and email) a new code
 
 function fg_is_review($email) { return strtolower(trim((string)$email)) === FG_REVIEW_EMAIL; }
 function fg_review_path() { return FG_DATA_DIR . '/review-login.json'; }
