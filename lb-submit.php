@@ -2,8 +2,10 @@
 /**
  * POST {email, session, name, ck, v, answers:[optionIndex|-1 ...], seconds}
  * Marks the set on the server (UPSC style) and adds it to the student's
- * All-India total. Only the FIRST attempt at a given set counts.
- * → {ranked, points, correct, wrong, skipped, board:{me,...}}
+ * All-India total. Each set counts once, at the student's BEST score: a repeat
+ * attempt that beats the earlier score adds the difference (28 Sep 2026); a
+ * repeat that does not is a practice attempt and changes nothing.
+ * → {ranked, points (added now), score, best, improved, correct, wrong, skipped, board:{me,...}}
  */
 require __DIR__ . '/lb-lib.php';
 fg_preflight();
@@ -38,9 +40,23 @@ $adir = lb_dir() . '/attempts/' . lb_uid($email);
 if (!is_dir($adir)) mkdir($adir, 0755, true);
 $afile = $adir . '/' . $ck . '-' . $v . ($preview ? '-p' : '') . '.json';
 $already = is_file($afile);
+$old = $already ? json_decode((string)file_get_contents($afile), true) : null;
+if (!is_array($old)) $old = null;
+$oldCounted = $old && !empty($old['ranked']);            // the earlier attempt is in the totals
+$oldPts = $oldCounted ? (float)($old['points'] ?? 0) : 0.0;
+$improved = $already && !$tooFast && (!$oldCounted || $points > $oldPts);
 $attempt = ['ck' => $ck, 'v' => $v, 'n' => $n, 'correct' => $correct, 'wrong' => $wrong, 'skipped' => $skipped,
-            'points' => $points, 'seconds' => $seconds, 'at' => date('c'), 'ranked' => !$already && !$tooFast];
-if (!$already) file_put_contents($afile, json_encode($attempt), LOCK_EX);
+            'points' => $points, 'seconds' => $seconds, 'at' => date('c'), 'ranked' => (!$already && !$tooFast) || $improved,
+            'attempts' => $old ? (int)($old['attempts'] ?? 1) + 1 : 1];
+if ($improved) { $attempt['first_at'] = $old['first_at'] ?? ($old['at'] ?? null); $attempt['improved_from'] = $oldCounted ? $oldPts : null; }
+if (!$already || $improved) file_put_contents($afile, json_encode($attempt), LOCK_EX);
+elseif ($old) { $old['attempts'] = $attempt['attempts']; $old['last_at'] = date('c'); file_put_contents($afile, json_encode($old), LOCK_EX); }
+// What this attempt adds to the totals: everything for a new set, the difference for a better repeat.
+$dPoints = $points; $dCorrect = $correct; $dWrong = $wrong; $dSkipped = $skipped; $dSeconds = $seconds; $newSet = !$already || !$oldCounted;
+if ($improved && $oldCounted) {
+    $dPoints = round($points - $oldPts, 2); $dCorrect = $correct - (int)($old['correct'] ?? 0); $dWrong = $wrong - (int)($old['wrong'] ?? 0);
+    $dSkipped = $skipped - (int)($old['skipped'] ?? 0); $dSeconds = $seconds - (int)($old['seconds'] ?? 0);
+}
 
 $u = lb_load_user($email) ?: ['email' => $email, 'points' => 0, 'tests' => 0, 'correct' => 0, 'wrong' => 0, 'skipped' => 0, 'seconds' => 0, 'months' => []];
 $premium = lb_is_premium($email);
@@ -61,18 +77,20 @@ if (!empty($b['name'])) $u['name'] = lb_display_name($b['name'], $email);
 elseif (empty($u['name']) || preg_match('/\s\.$/u', (string)$u['name'])) { $f = fg_load_user($email); if (!empty($f['name'])) $u['name'] = lb_display_name($f['name'], $email); }
 if (empty($u['name'])) $u['name'] = lb_display_name('', $email);
 if ($attempt['ranked']) {
-    $u['points'] = round($u['points'] + $points, 2); if (!$preview) $u['tests']++;
-    $u['correct'] += $correct; $u['wrong'] += $wrong; $u['skipped'] += $skipped; if (!$preview) $u['seconds'] += $seconds;
+    $u['points'] = round($u['points'] + $dPoints, 2); if (!$preview && $newSet) $u['tests']++;
+    $u['correct'] = max(0, (int)$u['correct'] + $dCorrect); $u['wrong'] = max(0, (int)$u['wrong'] + $dWrong); $u['skipped'] = max(0, (int)$u['skipped'] + $dSkipped);
+    if (!$preview) $u['seconds'] = max(0, (int)$u['seconds'] + $dSeconds);
     $mk = lb_month_key(time());
     $m = $u['months'][$mk] ?? ['points' => 0, 'tests' => 0];
-    $m['points'] = round($m['points'] + $points, 2); if (!$preview) $m['tests']++;
+    $m['points'] = round($m['points'] + $dPoints, 2); if (!$preview && $newSet) $m['tests']++;
     $u['months'][$mk] = $m;
 }
 lb_save_user($email, $u);
 $ref = ['rewarded' => false];
-if ($attempt['ranked'] && !$preview && $firstTest) $ref = ref_on_first_test($email);
+if ($attempt['ranked'] && !$preview && $firstTest && $newSet) $ref = ref_on_first_test($email);
 $board = lb_board(true);
-fg_json(200, ['ranked' => $attempt['ranked'], 'reason' => $already ? 'already_taken' : ($tooFast ? 'too_fast' : null),
-    'points' => $points, 'correct' => $correct, 'wrong' => $wrong, 'skipped' => $skipped, 'n' => $n,
+fg_json(200, ['ranked' => $attempt['ranked'], 'reason' => $attempt['ranked'] ? null : ($already ? 'already_taken' : ($tooFast ? 'too_fast' : null)),
+    'points' => $attempt['ranked'] ? $dPoints : $points, 'score' => $points, 'best' => max($points, $oldPts), 'improved' => $improved,
+    'correct' => $correct, 'wrong' => $wrong, 'skipped' => $skipped, 'n' => $n,
     'preview' => $preview, 'streak' => lb_streak_view($u, $premium), 'referral' => $ref,
     'board' => lb_public($board, $email)]);
